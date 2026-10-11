@@ -4,7 +4,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const execFileMock = vi.hoisted(() => vi.fn())
 vi.mock('node:child_process', () => ({ execFile: execFileMock }))
 
-import { workBuddyWindowsDiscoveryTools } from '../src/desktop-credential-protection.ts'
+import {
+  WINDOWS_REGISTRY_STEP_TIMEOUT_MS,
+  WORKBUDDY_DISCOVERY_BUDGET_MS,
+  WORKBUDDY_DISCOVERY_STEP_TIMEOUT_MS,
+  workBuddyWindowsDiscoveryTools,
+} from '../src/desktop-credential-protection.ts'
 
 type RegistryFailure = Error & { code: number, killed?: boolean }
 
@@ -324,6 +329,37 @@ describe('issues #105/#106/#107: -Command argument binding on Windows PowerShell
       expect(fallbackCalls).toHaveLength(1)
       expect(fallbackCalls[0]!.args[fallbackCalls[0]!.args.indexOf('-Root') + 1]).toBe(root)
     }
+  })
+})
+
+describe('issues #105/#106/#107: Windows registry step budget', () => {
+  it('gives reg.exe and the PowerShell fallback the Windows step limit, not the macOS one', async () => {
+    // Real CI evidence behind this: on GitHub's windows-2022/2025 images the
+    // plain HKLM uninstall `reg query /s` needs more than the old 3s step
+    // limit, so a software-dense machine read as "absent" when it was merely
+    // slow. Both Windows subprocesses must carry the Windows-specific limit.
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    const calls: { binary: string, options: { timeout?: number } }[] = []
+    registryStdout(Buffer.concat([GBK_CJK]), {
+      fallback: { stdout: '[]' },
+      onSpawn: (binary, _args, execOptions) => { calls.push({ binary, options: execOptions as { timeout?: number } }) },
+    })
+    await workBuddyWindowsDiscoveryTools().queryUninstallRoot('HKCU\\Uninstall', new AbortController().signal)
+    const reg = calls.find(call => /reg\.exe$/u.test(call.binary))
+    const fallback = calls.find(call => /powershell/iu.test(call.binary))
+    expect(reg?.options.timeout).toBe(WINDOWS_REGISTRY_STEP_TIMEOUT_MS)
+    expect(fallback?.options.timeout).toBe(WINDOWS_REGISTRY_STEP_TIMEOUT_MS)
+    expect(WINDOWS_REGISTRY_STEP_TIMEOUT_MS).not.toBe(WORKBUDDY_DISCOVERY_STEP_TIMEOUT_MS)
+  })
+
+  it('keeps a Windows step within the whole-discovery budget', () => {
+    // The budget, not the step limit, stays the user-facing ceiling: a step
+    // may never outlive the whole discovery, so raising the Windows step
+    // limit cannot raise the worst-case wait. The budget itself is pinned so
+    // that changing it is a deliberate decision, never a side effect.
+    expect(WINDOWS_REGISTRY_STEP_TIMEOUT_MS).toBeLessThanOrEqual(WORKBUDDY_DISCOVERY_BUDGET_MS)
+    expect(WORKBUDDY_DISCOVERY_BUDGET_MS).toBe(10_000)
+    expect(WORKBUDDY_DISCOVERY_STEP_TIMEOUT_MS).toBe(3_000)
   })
 })
 

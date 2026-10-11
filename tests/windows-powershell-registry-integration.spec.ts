@@ -61,6 +61,8 @@ const PRODUCTION_ROOTS = [
   'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
   'HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
 ] as const
+/** Fixed log labels for {@link PRODUCTION_ROOTS}: identifiers only, never registry content. */
+const ROOT_LABELS = ['hkcu', 'hklm', 'wow6432node'] as const
 
 /** One real subprocess run, captured without throwing; stdout/stderr stay bytes. */
 interface RunResult {
@@ -143,7 +145,10 @@ describe.skipIf(!IS_WINDOWS)('WINDOWS-ONLY real-process integration: PowerShell 
   }, 60_000)
 
   it('queryUninstallRoot returns the Unicode entry through the real 5.1 fallback (GREEN)', async () => {
+    const startedAt = Date.now()
     const output = await workBuddyWindowsDiscoveryTools().queryUninstallRoot(HKCU_UNINSTALL_ROOT, new AbortController().signal)
+    // Wall time only (reg.exe + PowerShell fallback); no registry content.
+    console.log(`windows registry hkcu fallback wall time: ${Date.now() - startedAt}ms`)
     // Boolean assertions: a failed toContain would print the whole document
     // into the log, other software's uninstall rows included.
     expect(output.includes(TEST_DISPLAY_NAME), 'the Unicode DisplayName must round-trip through the fallback JSON').toBe(true)
@@ -154,15 +159,28 @@ describe.skipIf(!IS_WINDOWS)('WINDOWS-ONLY real-process integration: PowerShell 
   }, 60_000)
 
   it('classifies the three production roots: readable resolves, absent resolves empty', async () => {
-    for (const root of PRODUCTION_ROOTS) {
-      const output = await workBuddyWindowsDiscoveryTools().queryUninstallRoot(root, new AbortController().signal)
-      expect(typeof output, `${root} must read as a document, not a failure`).toBe('string')
-      if (root === HKCU_UNINSTALL_ROOT) {
-        expect(output.includes(TEST_DISPLAY_NAME), 'the HKCU root carries the test entry').toBe(true)
+    // Each root's wall time is logged from a finally, so a mid-loop failure
+    // (a step-budget timeout, say) still names the root that was in flight.
+    // Fixed labels and milliseconds only, never registry content.
+    for (const [index, root] of PRODUCTION_ROOTS.entries()) {
+      const startedAt = Date.now()
+      try {
+        const output = await workBuddyWindowsDiscoveryTools().queryUninstallRoot(root, new AbortController().signal)
+        expect(typeof output, `${root} must read as a document, not a failure`).toBe('string')
+        if (root === HKCU_UNINSTALL_ROOT) {
+          expect(output.includes(TEST_DISPLAY_NAME), 'the HKCU root carries the test entry').toBe(true)
+        }
+      } finally {
+        console.log(`windows registry root ${ROOT_LABELS[index]} wall time: ${Date.now() - startedAt}ms`)
       }
     }
-    const absent = await workBuddyWindowsDiscoveryTools().queryUninstallRoot(ABSENT_KEY, new AbortController().signal)
-    expect(absent, 'a root that does not exist is an empty document, never a failure').toBe('')
+    const absentStartedAt = Date.now()
+    try {
+      const absent = await workBuddyWindowsDiscoveryTools().queryUninstallRoot(ABSENT_KEY, new AbortController().signal)
+      expect(absent, 'a root that does not exist is an empty document, never a failure').toBe('')
+    } finally {
+      console.log(`windows registry root absent wall time: ${Date.now() - absentStartedAt}ms`)
+    }
   }, 120_000)
 
   it('the production -Command argv returns the entry on real 5.1 (new argv GREEN)', async () => {
