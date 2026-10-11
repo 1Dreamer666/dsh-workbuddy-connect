@@ -418,9 +418,18 @@ const WINDOWS_REPLACEMENT_CHARACTER = '\uFFFD'
  * - **Output is JSON.** PowerShell does the escaping, so paths containing
  *   spaces, commas, or quotes no longer depend on column positions, and only
  *   the two values this plugin reads are collected.
+ * - **The invocation wraps this script in a call-operator script block.**
+ *   Windows PowerShell 5.1 joins every argument after `-Command` into one
+ *   command string and parses that string as code, so a script whose text
+ *   merely starts with `param` never receives the trailing `-Root` tokens —
+ *   they land inside the script text, `$Root` stays empty, and every
+ *   fallback query fails as exit 2/3 (#105/#106/#107). See
+ *   {@link WINDOWS_POWERSHELL_QUERY_COMMAND}.
  *
  * The root is passed as a `-Root` argument, never interpolated into the
- * command text.
+ * command text, and it must pass {@link WINDOWS_REGISTRY_ROOT_PATTERN}
+ * before the process starts — `-Command` arguments are re-parsed as code, so
+ * only provably inert path characters may ride along.
  */
 const WINDOWS_REGISTRY_RELATIVE_POWERSHELL = 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
 /** Exit code meaning the root key does not exist (a normal, expected outcome). */
@@ -442,6 +451,41 @@ const WINDOWS_POWERSHELL_QUERY_SCRIPT = [
   '};',
   'ConvertTo-Json -InputObject @($out) -Compress -Depth 3',
 ].join(' ')
+
+/**
+ * The `-Command` value actually handed to `powershell.exe`: the query script
+ * wrapped in a call-operator script block.
+ *
+ * Windows PowerShell 5.1 joins every argument that follows `-Command` into
+ * one command string and runs that string as code. A bare `param(...)`
+ * script therefore never binds the trailing `-Root <path>` tokens — they end
+ * up inside the script text, `$Root` is empty, and the query ends as exit
+ * 2/3: discovery incomplete, the app binary is never located, and at-rest
+ * key resolution fails as a silent `signed-out` (#105/#106/#107, three
+ * independent Windows reports on 0.7.2). The call operator makes the binding
+ * explicit: the joined command becomes `& { …script… } -Root <path>`, and
+ * `&` applies the named argument to the script block's `param` block — the
+ * form #106 verified on a real 5.1 machine.
+ *
+ * Exported for the Windows-only integration spec, which replays this exact
+ * text against a real `powershell.exe` 5.1 and derives the pre-fix 0.7.2
+ * argv from it by removing the wrapper. `src/index.ts` does not re-export
+ * it, so it is not part of the package's public API.
+ */
+export const WINDOWS_POWERSHELL_QUERY_COMMAND = `& { ${WINDOWS_POWERSHELL_QUERY_SCRIPT} }`
+
+/**
+ * The only roots this tool will name on a `-Command` command line.
+ *
+ * `powershell.exe` re-parses everything after `-Command` as code, so a root
+ * is handed over only when it is provably inert in that position: a hive
+ * this file actually queries, then subkey components of plain path
+ * characters — no spaces, quotes, subexpressions, or any other byte that
+ * could change what the joined command does. Production roots are the fixed
+ * {@link WINDOWS_REGISTRY_ROOTS}; anything else is refused before any
+ * process starts, as "we could not check", never as executable text.
+ */
+const WINDOWS_REGISTRY_ROOT_PATTERN = /^HK(?:LM|CU)(?:\\[A-Za-z0-9._-]+)+$/u
 
 /** One discovery subprocess's own limits; see {@link WorkBuddyAtRestKeyProviderOptions}. */
 export const WORKBUDDY_DISCOVERY_STEP_TIMEOUT_MS = 3_000
@@ -701,6 +745,13 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
    * three roots being absent is normal and must not fail the search.
    */
   const runFallback = (root: string, signal: AbortSignal): Promise<string> => new Promise<string>((resolve, reject) => {
+    // Guarded before anything starts: this root is about to ride a command
+    // line that is re-parsed as code, so it must be a plain path (see
+    // WINDOWS_REGISTRY_ROOT_PATTERN).
+    if (!WINDOWS_REGISTRY_ROOT_PATTERN.test(root)) {
+      reject(new DiscoveryIncompleteError('the registry root was not a plain HKLM/HKCU path this tool may query'))
+      return
+    }
     if (powershellPath === undefined) {
       reject(new DiscoveryIncompleteError('SystemRoot is not configured'))
       return
@@ -714,7 +765,7 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      WINDOWS_POWERSHELL_QUERY_SCRIPT,
+      WINDOWS_POWERSHELL_QUERY_COMMAND,
       '-Root',
       root,
     ], {
@@ -771,6 +822,17 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
       // byte pairs decode as valid UTF-8 with no replacement character at all,
       // so the reported case could pass silently. Byte range has no such blind
       // spot.
+      //
+      // Known cost, deliberately kept (recorded as an independent follow-up to
+      // #105/#106/#107, not changed in the hotfix): any non-ASCII byte
+      // anywhere in the root's output — another product's localized
+      // DisplayName included — re-reads the whole root through PowerShell.
+      // Narrowing the trigger to this product's own entries would mean
+      // associating value lines with their key headers before the bytes can
+      // be decoded, and a wrong association silently drops a real Chinese
+      // WorkBuddy path back into the code-page trap #88 fixed. Until that
+      // association can be made safely, the over-trigger costs one extra
+      // process per affected root, not correctness.
       if (isAsciiOnly(raw)) return raw.toString('utf8')
       return await runFallback(root, signal)
     },

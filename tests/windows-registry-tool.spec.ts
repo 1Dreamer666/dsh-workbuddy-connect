@@ -263,3 +263,93 @@ describe('issue #88: fallback failure classification', () => {
     expect(call.binary).toContain('WindowsPowerShell')
   })
 })
+
+describe('issues #105/#106/#107: -Command argument binding on Windows PowerShell 5.1', () => {
+  it('hands -Command a call-operator script block so the trailing -Root binds', async () => {
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    const calls: { binary: string, args: string[] }[] = []
+    registryStdout(Buffer.concat([GBK_CJK]), { fallback: { stdout: '[]' }, onSpawn: (binary, args) => { calls.push({ binary, args }) } })
+    const root = 'HKCU\\Uninstall'
+    await workBuddyWindowsDiscoveryTools().queryUninstallRoot(root, new AbortController().signal)
+    const call = calls.find(c => /powershell/iu.test(c.binary))!
+    const commandIndex = call.args.indexOf('-Command')
+    // Windows PowerShell 5.1 joins every argument after -Command into ONE
+    // command string and parses that string as code; it does not bind
+    // trailing `-Root <path>` tokens to a script whose text merely starts
+    // with `param`. The pre-fix argv (a bare `param(...)` script with
+    // `-Root <path>` after it) therefore left $Root empty — the trailing
+    // tokens landed inside the script text — and every fallback query ended
+    // as exit 2/3 (#105/#106/#107). These assertions are made against the
+    // joined command the child actually re-parses, so the bare-`param` shape
+    // fails them while the call-operator wrapper passes: `& { … }` makes the
+    // operator apply `-Root <path>` to the script block's param block, the
+    // form #106 verified on a real 5.1 machine.
+    const commandText = call.args.slice(commandIndex + 1).join(' ')
+    const suffix = ` } -Root ${root}`
+    expect(commandText.startsWith('& { ')).toBe(true)
+    expect(commandText.endsWith(suffix)).toBe(true)
+    expect(commandText).toContain('param([string]$Root)')
+    // The root rides only as the -Root value, never inside the script block
+    // the call operator executes.
+    expect(commandText.slice(0, commandText.length - suffix.length)).not.toContain(root)
+  })
+
+  it('keeps exactly one fallback process per root, with no shell in between', async () => {
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    const calls: { binary: string, args: string[] }[] = []
+    registryStdout(Buffer.concat([GBK_CJK]), { fallback: { stdout: '[]' }, onSpawn: (binary, args) => { calls.push({ binary, args }) } })
+    await workBuddyWindowsDiscoveryTools().queryUninstallRoot('HKCU\\Uninstall', new AbortController().signal)
+    // The wrapper lives inside the -Command text powershell.exe itself
+    // parses: no cmd.exe, no second interpreter, no extra process.
+    const fallbackCalls = calls.filter(c => /powershell/iu.test(c.binary))
+    expect(fallbackCalls).toHaveLength(1)
+    expect(calls.filter(c => /cmd|pwsh/iu.test(c.binary))).toHaveLength(0)
+  })
+
+  it('passes the three production roots through to the fallback', async () => {
+    // Positive control for the root shape guard: the fixed roots production
+    // queries must all reach the fallback, so the guard can never silently
+    // disable discovery.
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    for (const root of [
+      'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+      'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+      'HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+    ]) {
+      execFileMock.mockReset()
+      const calls: { binary: string, args: string[] }[] = []
+      registryStdout(Buffer.concat([GBK_CJK]), { fallback: { stdout: '[]' }, onSpawn: (binary, args) => { calls.push({ binary, args }) } })
+      await workBuddyWindowsDiscoveryTools().queryUninstallRoot(root, new AbortController().signal)
+      const fallbackCalls = calls.filter(c => /powershell/iu.test(c.binary))
+      expect(fallbackCalls).toHaveLength(1)
+      expect(fallbackCalls[0]!.args[fallbackCalls[0]!.args.indexOf('-Root') + 1]).toBe(root)
+    }
+  })
+})
+
+describe('issues #105/#106/#107: roots are guarded before they reach a command line', () => {
+  // `powershell.exe` re-parses everything after -Command as code, so a root
+  // is only allowed onto that command line when it is provably inert in that
+  // position. Each case below is executable text, a token splitter, or not a
+  // registry path at all; all must be refused before any process starts.
+  it.each([
+    ['statement separator', 'HKCU\\Software; Remove-Item -Recurse C:\\'],
+    ['subexpression', 'HKCU\\Software$(Remove-Item -Recurse C:\\)'],
+    ['backtick escape', 'HKCU\\Software`Remove-Item'],
+    ['double quote', 'HKCU\\Software"'],
+    ['single quote', "HKCU\\Software'"],
+    ['space splitting a component', 'HKCU\\Software\\Program Files\\Uninstall'],
+    ['brace block', 'HKCU\\Software\\{GUID}'],
+    ['ampersand chaining', 'HKLM\\Software & whoami'],
+    ['not a hive', 'HKXX\\Software'],
+    ['hive without a subkey', 'HKLM'],
+  ])('refuses %s without starting the fallback', async (_label, root) => {
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    const spawned: string[] = []
+    registryStdout(Buffer.concat([GBK_CJK]), { fallback: { stdout: '[]' }, onSpawn: binary => { spawned.push(binary) } })
+    await expect(workBuddyWindowsDiscoveryTools().queryUninstallRoot(root, new AbortController().signal))
+      .rejects.toThrow(/plain HKLM\/HKCU path this tool may query/)
+    // reg.exe already ran (its output was ambiguous); the fallback must not.
+    expect(spawned.filter(binary => /powershell/iu.test(binary))).toHaveLength(0)
+  })
+})
