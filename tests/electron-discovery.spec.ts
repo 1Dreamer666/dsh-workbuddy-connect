@@ -25,6 +25,17 @@ import { CN_VARIANT, AI_VARIANT , electronProfileFor} from '../src/variants.ts'
  * authoritative, discovery runs only after the default path fails, identity is
  * proved before execution, and an unfinished check is never mistaken for an
  * absent app.
+ *
+ * Platform pinning (#62): every macOS-flow provider below names
+ * `platform: 'darwin'` explicitly — the same seam
+ * `tests/windows-electron-discovery.spec.ts` uses with `'win32'` — instead of
+ * relying on the runner being macOS. Before the pin these tests failed
+ * 19-at-a-time on Windows because `discoverMacosApp` answers
+ * `electron-binary-unavailable` there, drowning that platform's real
+ * regressions in deterministic noise. Only the two cases whose fixtures *are*
+ * POSIX filesystem semantics (exec-bit rejection, an EACCES parent) stay
+ * platform-gated; everything else now runs the macOS discovery logic on every
+ * runner.
  */
 
 const CN_BUNDLE_ID = electronProfileFor(CN_VARIANT).macOS.bundleId
@@ -94,6 +105,7 @@ describe('#48 explicit configuration is authoritative', () => {
       // be consulted, because the caller named a binary and it is unusable.
       electronPath: '/nonexistent/workbuddy-electron',
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: await executableAt('default-Electron'),
       tools,
     })
@@ -108,6 +120,7 @@ describe('#48 explicit configuration is authoritative', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: await executableAt('default-Electron'),
       tools,
     })
@@ -120,6 +133,7 @@ describe('#48 explicit configuration is authoritative', () => {
       product: electronProfileFor(CN_VARIANT),
       electronPath: '/nonexistent/workbuddy-electron',
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       tools: fakeTools(),
     })
     const error = await provider.protectorKeyFor([KEY_ID]).catch((caught: unknown) => caught)
@@ -134,6 +148,7 @@ describe('#48 discovery runs only after the default path fails', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: defaultPath,
       tools,
       spawnHelper: async () => PAYLOAD_TEXT,
@@ -153,6 +168,7 @@ describe('#48 discovery runs only after the default path fails', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools,
       spawnHelper: async () => PAYLOAD_TEXT,
@@ -177,6 +193,7 @@ describe('#48 identity is proved before execution', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({
         findApps: async () => [app.bundlePath],
@@ -188,7 +205,10 @@ describe('#48 identity is proved before execution', () => {
     expect(reasonCodeOf(error)).toBe('electron-binary-not-found')
   })
 
-  it('rejects a matching bundle whose Electron is not executable', async () => {
+  // Windows-gated: the fixture's whole point is the 0o644 exec bit, and
+  // Windows has none — `accessSync(X_OK)` there only checks existence, so the
+  // file would count as executable and the assertion is untestable.
+  it.skipIf(process.platform === 'win32')('rejects a matching bundle whose Electron is not executable', async () => {
     const bundlePath = join(root, 'WorkBuddy.app')
     // Present but not executable: identity alone is not enough to execute it.
     await mkdir(join(bundlePath, 'Contents', 'MacOS'), { recursive: true })
@@ -196,6 +216,7 @@ describe('#48 identity is proved before execution', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({ findApps: async () => [bundlePath] }),
       spawnHelper: async () => PAYLOAD_TEXT,
@@ -211,6 +232,7 @@ describe('#48 candidate counting', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({ findApps: async () => [app.bundlePath] }),
       spawnHelper: async () => PAYLOAD_TEXT,
@@ -222,6 +244,7 @@ describe('#48 candidate counting', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({ findApps: async () => [] }),
     })
@@ -235,6 +258,7 @@ describe('#48 candidate counting', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({ findApps: async () => [first.bundlePath, second.bundlePath] }),
     })
@@ -252,6 +276,7 @@ describe('#48 candidate counting', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({ findApps: async () => [app.bundlePath, app.bundlePath] }),
       spawnHelper: async () => PAYLOAD_TEXT,
@@ -265,6 +290,7 @@ describe('#48 an unfinished check is not an absent app', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({ findApps: async () => { throw new Error('mdfind is unavailable') } }),
     })
@@ -283,6 +309,7 @@ describe('#48 an unfinished check is not an absent app', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({
         findApps: async () => [good.bundlePath, unreadable.bundlePath],
@@ -317,6 +344,7 @@ describe('#48 an unfinished check is not an absent app', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools,
       spawnHelper: async () => PAYLOAD_TEXT,
@@ -325,7 +353,12 @@ describe('#48 an unfinished check is not an absent app', () => {
     expect(provider.helperPath()).toBe(good.electronPath)
   })
 
-  it('never treats an uninspectable candidate as absent, even beside a usable app', async () => {
+  // Windows-gated: mode 000 on the parent only blocks traversal on POSIX
+  // filesystems; on Windows the chmod is near-inert, the bundle below stays
+  // reachable, and the "uninspectable candidate" this test exists for never
+  // comes into being. The ENOENT-vs-error distinction it pins stays covered on
+  // macOS and Linux runners.
+  it.skipIf(process.platform === 'win32')('never treats an uninspectable candidate as absent, even beside a usable app', async () => {
     // A candidate the process may not stat is *not* a deleted one. Reading
     // only ENOENT as "gone" is what keeps a live app from being chosen over a
     // candidate we merely could not inspect: `existsSync` answers `false` for
@@ -344,6 +377,7 @@ describe('#48 an unfinished check is not an absent app', () => {
       const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
         discovery: 'macos-workbuddy',
+        platform: 'darwin',
         defaultElectronPath: join(root, 'absent', 'Electron'),
         tools: fakeTools({
           findApps: async () => [good.bundlePath, unreadable],
@@ -378,6 +412,7 @@ describe('#48 an unfinished check is not an absent app', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools,
       discoveryBudgetMs: 30,
@@ -393,6 +428,7 @@ describe('#48 an unfinished check is not an absent app', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({ findApps: async () => [app.bundlePath] }),
       spawnHelper: async () => 'not a payload',
@@ -406,6 +442,7 @@ describe('#48 an unfinished check is not an absent app', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({ findApps: async () => [app.bundlePath] }),
       spawnHelper: async () => PAYLOAD_TEXT,
@@ -457,6 +494,7 @@ describe('#48 a failed discovery is retried, a successful one is cached', () => 
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({
         findApps: async () => {
@@ -481,6 +519,7 @@ describe('#48 a failed discovery is retried, a successful one is cached', () => 
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({
         findApps: async () => { searches += 1; return [app.bundlePath] },
@@ -509,6 +548,7 @@ describe('#48 discovery failures reach the status document as reasonCode', () =>
       keyProvider: new WorkBuddyAtRestKeyProvider({
         product: electronProfileFor(CN_VARIANT),
         discovery: 'macos-workbuddy',
+        platform: 'darwin',
         defaultElectronPath: join(root, 'absent', 'Electron'),
         tools: fakeTools({ findApps: async () => [] }),
       }),
@@ -562,6 +602,7 @@ describe('#59/#60 the international app on macOS', () => {
     const ai = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(AI_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: aiDefault.electronPath,
       tools: aiTools({ findApps: async () => { throw new Error('must not be called') } }),
       spawnHelper: async () => PAYLOAD_TEXT,
@@ -584,6 +625,7 @@ describe('#59/#60 the international app on macOS', () => {
     const aiProvider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(AI_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       // The identity seam answers per bundle: the AI app carries the AI id and
       // the CN app beside it the CN id — only the first is this product's.
@@ -598,6 +640,7 @@ describe('#59/#60 the international app on macOS', () => {
     const cnProvider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({
         findApps: async () => [ai.bundlePath, cn.bundlePath],
@@ -614,6 +657,7 @@ describe('#59/#60 the international app on macOS', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(AI_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       // The identity seam answers for whatever bundle it is handed; a CN id
       // beside an AI search is a decidable non-match, never a candidate.
@@ -628,6 +672,7 @@ describe('#59/#60 the international app on macOS', () => {
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(AI_VARIANT),
       discovery: 'macos-workbuddy',
+      platform: 'darwin',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: aiTools({ findApps: async () => [] }),
     })

@@ -271,6 +271,16 @@ describe('at-rest key provider', () => {
     const cn = new WorkBuddyAtRestKeyProvider({ product: electronProfileFor(CN_VARIANT), discovery: 'macos-workbuddy' })
     if (process.platform === 'darwin') {
       expect(cn.helperPath()).toBe('/Applications/WorkBuddy.app/Contents/MacOS/Electron')
+    } else if (process.platform === 'win32') {
+      // #62: on Windows the same provider answers with the LOCALAPPDATA
+      // default when that variable exists — the old `toBeUndefined()` else
+      // branch failed deterministically there. A blank/absent LOCALAPPDATA
+      // (stripped CI environments) stays undefined, mirroring
+      // defaultWorkBuddyElectronPath.
+      const localAppData = process.env.LOCALAPPDATA?.trim()
+      expect(cn.helperPath()).toBe(localAppData === undefined || localAppData === ''
+        ? undefined
+        : join(localAppData, 'Programs', 'WorkBuddy', 'WorkBuddy.exe'))
     } else {
       expect(cn.helperPath()).toBeUndefined()
     }

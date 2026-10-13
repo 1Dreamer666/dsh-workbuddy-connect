@@ -752,7 +752,7 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
           resolve(Buffer.alloc(0))
           return
         }
-        reject(new DiscoveryIncompleteError(`reg.exe could not complete (${error.killed === true ? 'timed out' : String(error.code ?? 'unavailable')})`))
+        reject(new DiscoveryIncompleteError(`reg.exe could not complete (${subprocessFailureReason(error)})`))
         return
       }
       resolve(stdout)
@@ -821,7 +821,7 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
           reject(new DiscoveryIncompleteError(`powershell.exe could not read the registry root ${root}`))
           return
         }
-        reject(new DiscoveryIncompleteError(`powershell.exe could not complete (${error.killed === true ? 'timed out' : String(error.code ?? 'unavailable')})`))
+        reject(new DiscoveryIncompleteError(`powershell.exe could not complete (${subprocessFailureReason(error)})`))
         return
       }
       const records = parseWindowsUninstallJson(stdout)
@@ -1306,6 +1306,20 @@ function parseWindowsUninstallJson(output: string): string | undefined {
       })
     })
   }
+}
+
+/**
+ * Why a finished-but-failed discovery subprocess cannot produce an answer.
+ *
+ * A size-limit overflow (`maxBuffer`, delivered as
+ * `ERR_CHILD_PROCESS_STDIO_MAXBUFFER`) gets its own words: reporting it as a
+ * timeout would send a user chasing scheduler latency when the machine's
+ * uninstall tree is simply larger than the documented cap — a different
+ * problem with a different fix. Both stay "incomplete", never "absent".
+ */
+function subprocessFailureReason(error: { readonly code?: unknown, readonly killed?: boolean }): string {
+  if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return 'the output exceeded the size limit'
+  return error.killed === true ? 'timed out' : String(error.code ?? 'unavailable')
 }
 
 /** Only known missing-key diagnostics can safely make a failed query empty. */
