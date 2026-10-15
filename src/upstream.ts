@@ -489,6 +489,29 @@ function billingHeaders(credential: WorkBuddyCredential): Record<string, string>
 }
 
 /**
+ * Account-identity headers for the CN catalog requests (`/v3/config` and the
+ * console badge read). The gateway also splits `/v3/config` by account
+ * identity: an enterprise account without this pair is silently answered with
+ * the personal roster (issue #123 — 18 vs 19 models, FlashX missing), and the
+ * pair is all-or-nothing there: `X-Enterprise-Id` alone is rejected outright
+ * while `X-User-Id` alone selects nothing. So the block is emitted only when
+ * both parts exist, and personal accounts keep the bare headers their roster
+ * was already correct under. `X-Tenant-Id`/`X-Domain` ride along in the
+ * spelling `billingHeaders` already proved the gateway accepts.
+ */
+function identityHeaders(credential: WorkBuddyCredential): Record<string, string> {
+  if (credential.uid === '') return {}
+  if (credential.enterpriseId === undefined || credential.enterpriseId === '') return {}
+  const headers: Record<string, string> = {
+    'X-User-Id': credential.uid,
+    'X-Enterprise-Id': credential.enterpriseId,
+    'X-Tenant-Id': credential.enterpriseId,
+  }
+  if (credential.domain !== '') headers['X-Domain'] = credential.domain
+  return headers
+}
+
+/**
  * Normalize an OpenAI chat-completions body for the WorkBuddy upstream:
  * force `stream: true` (the upstream rejects non-streaming), flatten
  * `tool_choice` (the upstream's field is a string; object forms return 400),
@@ -843,6 +866,13 @@ export class WorkBuddyUpstreamClient {
    * advertises is exactly the one its own requests can use. The international
    * variant has no CLI identity, so it keeps the App-shaped UA.
    *
+   * The same split has an account-identity axis (issue #123): an enterprise
+   * account must also present `X-User-Id` + `X-Enterprise-Id`, or the gateway
+   * answers with the personal roster. CN sends that pair via
+   * {@link identityHeaders} whenever the credential carries both halves; the
+   * international gateway's split was never measured against account headers,
+   * so it keeps its documented shape.
+   *
    * Membership is the `cli` roster intersected with the usable rows (see
    * {@link parseModelCatalog}); the promo badges the product document does
    * not carry are merged in from a best-effort console read — see
@@ -864,7 +894,7 @@ export class WorkBuddyUpstreamClient {
         Accept: 'application/json',
         Origin: originReferer(credential),
         Referer: `${originReferer(credential)}/`,
-        ...international ? { 'X-Requested-With': 'XMLHttpRequest', 'X-Product': 'SaaS' } : {},
+        ...international ? { 'X-Requested-With': 'XMLHttpRequest', 'X-Product': 'SaaS' } : identityHeaders(credential),
         'User-Agent': appVersion === undefined ? CLIENT_UA : appUserAgent(appVersion.version),
       },
       signal: signal === undefined
@@ -921,6 +951,7 @@ export class WorkBuddyUpstreamClient {
           Accept: 'application/json',
           Origin: originReferer(credential),
           Referer: `${originReferer(credential)}/`,
+          ...identityHeaders(credential),
           'User-Agent': CLIENT_UA,
         },
         signal: signal === undefined
