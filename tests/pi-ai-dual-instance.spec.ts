@@ -111,7 +111,14 @@ function modelFor(provider: string) {
 }
 
 describe('#92 cross-instance: host drives a provider built by another pi-ai copy', () => {
-  it('runs a request end to end through a second-copy provider', async () => {
+  // 30s is not arbitrary: materialiseSecondCopy() physically copies the pi-ai
+  // tree, which grew sharply at 1.3.0 (bundled provider SDKs). Warm-cache runs
+  // measure ~4.5s — already at vitest's 5s default — and cold-cache runs on
+  // NTFS (first run after boot, AV scanning) exceed it, which is exactly how
+  // the upgrade to 1.3.0 was caught failing. A symlink cannot replace the copy
+  // (realpath resolution would collapse the two copies into one module
+  // instance), so the slowness is inherent; keep the headroom.
+  it('runs a request end to end through a second-copy provider', { timeout: 30_000 }, async () => {
     const { root, dir } = materialiseSecondCopy()
     try {
       // Build the provider using the SECOND copy's own entry points — its
@@ -196,7 +203,8 @@ describe('#92 cross-instance: host drives a provider built by another pi-ai copy
     }
   })
 
-  it('the two copies are genuinely distinct module instances', async () => {
+  // Same copy cost as above — see the note on the first test.
+  it('the two copies are genuinely distinct module instances', { timeout: 30_000 }, async () => {
     const { root, dir } = materialiseSecondCopy()
     try {
       const [live, second] = await Promise.all([
