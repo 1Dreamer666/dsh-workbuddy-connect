@@ -11,7 +11,7 @@
 import { readFile, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { withFileLock, writeFileAtomic } from './atomic-write.ts'
+import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { regionOf } from './upstream.ts'
 import { isWsl } from './wsl.ts'

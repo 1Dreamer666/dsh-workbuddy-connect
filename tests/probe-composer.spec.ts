@@ -185,13 +185,27 @@ describe('Composer model probe', () => {
   it('explains the click in a tooltip on hover, not a native title', async () => {
     await mount()
     expect(tooltips()).toHaveLength(0)
-    const wrapper = view!.root.findAllByType('span')[0]!
-    await act(async () => { wrapper.props.onMouseEnter() })
+    await act(async () => { probeButton().props.onMouseEnter() })
     expect(tooltips()).toHaveLength(1)
     expect(tooltips()[0]!.children.join('')).toContain('glm-5.2')
     // The tooltip is the accessible description; no `title` attribute is used.
     expect(probeButton()!.props.title).toBeUndefined()
     expect(probeButton()!.props['aria-describedby']).toBeTruthy()
+  })
+
+  it('keeps reasoning tooltips off the credit badge and refresh button', async () => {
+    await mount()
+    const wrapper = view!.root.findAllByType('span')[0]!
+    await act(async () => { wrapper.props.onMouseEnter?.() })
+    await act(async () => { refreshButton().props.onMouseEnter?.() })
+    expect(tooltips()).toHaveLength(0)
+    expect(refreshButton().props.title).toBe(en.composerCreditRefresh)
+    await act(async () => { probeButton().props.onMouseEnter() })
+    expect(tooltips()).toHaveLength(1)
+    await act(async () => { probeButton().props.onMouseLeave() })
+    await act(async () => { refreshButton().props.onMouseEnter?.() })
+    expect(tooltips()).toHaveLength(0)
+    expect(posts()).toHaveLength(0)
   })
 
   it('does not announce a result that predates this page', async () => {
@@ -205,8 +219,7 @@ describe('Composer model probe', () => {
     await mount()
     expect(buttonLabels()).not.toContain(en.probeNoteDismiss)
     // The result is still discoverable: the tooltip reports it on hover.
-    const wrapper = view!.root.findAllByType('span')[0]!
-    await act(async () => { wrapper.props.onMouseEnter() })
+    await act(async () => { probeButton().props.onMouseEnter() })
     expect(tooltips()).toHaveLength(1)
     expect(tooltips()[0]!.children.join('')).toContain('low / high')
   })

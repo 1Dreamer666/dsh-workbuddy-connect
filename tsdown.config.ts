@@ -40,6 +40,8 @@ export default [
     clean: true,
     define: VERSION_DEFINE,
     deps: {
+      // Ship the official helper without requiring an App-provided module.
+      alwaysBundle: ['@deepseek-ai/dsh-atomic-write'],
       neverBundle: [
         '@earendil-works/pi-ai',
         '@deepseek-ai/schemastery',

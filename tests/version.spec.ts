@@ -50,6 +50,16 @@ describe('package version sync', () => {
       `no built bundle declares WORKBUDDY_CONNECT_VERSION as "${pkg.version}" — rebuild before committing or publishing`,
     ).not.toHaveLength(0)
   })
+
+  it('built bundles need no runtime import of the atomic-write helper', () => {
+    const libDir = new URL('../lib/', import.meta.url)
+    if (!existsSync(libDir)) return
+    for (const name of readdirSync(libDir).filter(name => name.endsWith('.js'))) {
+      const source = readFileSync(new URL(`../lib/${name}`, import.meta.url), 'utf8')
+      expect(source, `${name} still requires the host atomic-write package`)
+        .not.toMatch(/(?:from\s*|import\s*\(|require\s*\()\s*['"]@deepseek-ai\/dsh-atomic-write['"]/)
+    }
+  })
 })
 
 describe('peer manifest pins the verified DSH cores', () => {
@@ -61,10 +71,9 @@ describe('peer manifest pins the verified DSH cores', () => {
    * means editing this list after a real run, not letting a caret do it.
    * Since 0.7.7 the list was 0.2.1-rc.1 alone: 0.2.0-rc.2 cannot be
    * smoke-tested anymore alongside it, and an untested arm is support
-   * nobody verified. This build moves the pin to 0.2.1-rc.2, the core it was
-   * actually built and loaded against, and drops `dsh-atomic-write`: 0.2.1
-   * no longer exposes that package to plugins, so the write path is
-   * implemented in-repo (`src/atomic-write.ts`) instead of peer-declared.
+   * nobody verified. This candidate targets 0.2.1-rc.2 and bundles the
+   * official atomic-write helper. Local checks do not replace Desktop
+   * acceptance testing.
    *
    * #74's lesson on top of it: pi-ai must NOT be a dual-arm range. An
    * in-place upgrade from a 0.6.x-era pnpm profile keeps satisfying
@@ -94,14 +103,13 @@ describe('peer manifest pins the verified DSH cores', () => {
     }
   })
 
-  it('does not peer-declare the atomic-write helper the core stopped exposing', () => {
-    // 0.2.1 keeps `dsh-atomic-write` inside its own bundle and resolves it for
-    // plugins no longer; a peer on it would fail at install and leave the
-    // dependency tree unsynced (the profile then cannot resolve any
-    // `@deepseek-ai/*`). The in-repo implementation replaces it.
+  it('bundles the official atomic-write helper instead of requiring a host peer', () => {
+    // The Desktop report could not resolve this peer. Keep the official
+    // implementation and include it in lib so runtime resolution is unnecessary.
     const pkg = JSON.parse(
       readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
-    ) as { peerDependencies: Record<string, string> }
+    ) as { peerDependencies: Record<string, string>, devDependencies: Record<string, string> }
+    expect(pkg.devDependencies['@deepseek-ai/dsh-atomic-write']).toBe('0.2.1-rc.2')
     expect(pkg.peerDependencies['@deepseek-ai/dsh-atomic-write']).toBeUndefined()
   })
 
