@@ -18,9 +18,11 @@ import { WorkBuddyUpstreamClient } from '../src/upstream.ts'
  * envelope parsing drifts away from what the probe reads.
  *
  * Scope note: `invalid_parameter_value` is a generic spelling, so the widening
- * is only defensible together with the two negative pins below — a sibling code
- * naming another parameter must still degrade to `unknown`, and the China
- * endpoint must keep its own (unchanged) vocabulary.
+ * is only defensible together with the negative pins below — a sibling code
+ * naming another parameter must still degrade to `unknown`, and a model that
+ * accepts the sentinel must stay `non-validating`. The respelled code was
+ * later observed on the China endpoint too (2026-10-16, `deepseek-v4-pro`;
+ * reproduced 2026-10-17 on WorkBuddy CN 5.8.2), so both regions attribute it.
  */
 
 const GLOBAL: WorkBuddyCredential = {
@@ -32,7 +34,7 @@ const GLOBAL: WorkBuddyCredential = {
   source: 'desktop',
 }
 
-/** The China endpoint, for the region-scoping pin. */
+/** The China endpoint, for the region attribution pin. */
 const CN: WorkBuddyCredential = { ...GLOBAL, domain: 'www.codebuddy.cn' }
 
 /** Deterministic identity so the request never depends on the machine's Apps. */
@@ -142,7 +144,7 @@ function sweep(credential: WorkBuddyCredential, region: 'cn' | 'global') {
   })
 }
 
-describe('issue #143: the respelled global effort-rejection code', () => {
+describe('issue #143: the respelled effort-rejection code', () => {
   it('reads the respelled 11133 envelope as an effort rejection and completes the sweep', async () => {
     const upstream = scriptedUpstream(SENTINEL_REJECTION_BODY)
     const outcome = await sweep(GLOBAL, 'global')
@@ -172,13 +174,15 @@ describe('issue #143: the respelled global effort-rejection code', () => {
     expect(outcome.efforts).toEqual([])
   })
 
-  it('keeps the China endpoint degrading the respelled code to unknown', async () => {
-    // Measured only on www.workbuddy.ai. The region split is what keeps each
-    // endpoint to the vocabulary that was actually observed on it.
+  it('attributes the respelled code on the China endpoint as well', async () => {
+    // Observed on www.workbuddy.cn 2026-10-16 (`deepseek-v4-pro`, PR #145
+    // discussion) and reproduced 2026-10-17 on WorkBuddy CN 5.8.2; the same
+    // baseline-isolation argument carries the attribution on either endpoint.
     scriptedUpstream(SENTINEL_REJECTION_BODY)
     const outcome = await sweep(CN, 'cn')
-    expect(outcome.validation).toBe('unknown')
-    expect(outcome.efforts).toEqual([])
+    expect(outcome.validation).toBe('validating')
+    expect(outcome.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+    expect(outcome.requests).toBe(7)
   })
 
   it('reports non-validating when the upstream accepts the sentinel', async () => {

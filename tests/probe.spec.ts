@@ -155,15 +155,22 @@ describe('probeModel', () => {
     expect(outcome.requests).toBe(7)
   })
 
-  it('keeps the China endpoint degrading the respelled global code to unknown', async () => {
-    // The respelling was measured only on the global endpoint. Widening `cn`
-    // alongside it would be a guess, not an observation.
+  it('reads the respelled parameter rejection on the China endpoint too', async () => {
+    // Observed on www.workbuddy.cn 2026-10-16 (`deepseek-v4-pro`, PR #145
+    // discussion) and reproduced 2026-10-17 on WorkBuddy CN 5.8.2, so the
+    // respelled spelling is attributed on both regions.
     const table = new Map<string | undefined, ProbeAttempt>([
       [undefined, ACCEPTED],
       [SENTINEL, GLOBAL_REJECTED_RESPELT],
+      ['low', ACCEPTED],
+      ['medium', ACCEPTED],
+      ['high', ACCEPTED],
+      ['xhigh', ACCEPTED],
+      ['max', ACCEPTED],
     ])
     const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL, region: 'cn' })
-    expect(outcome.validation).toBe('unknown')
+    expect(outcome.validation).toBe('validating')
+    expect(outcome.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
 
   it('applies the global rejection code to the level sweep as well', async () => {
