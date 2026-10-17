@@ -219,11 +219,15 @@ describe('WorkBuddy Host settings integration', () => {
     await expect(ctx.llm.prepareCall({ provider: 'workbuddy', model: 'glm-5.3-flash', reasoningEffort: ReasoningEffortId('high') }))
       .resolves.toBeTruthy()
 
-    // Image modalities follow the per-model catalog flag (fallback list here):
-    // every row of the current CN roster declares image support.
+    // Image modalities follow the per-model catalog flag (fallback list here).
+    // The 2026-10-17 document dropped image support for `glm-5.2` and
+    // `glm-5.1`, so the roster is no longer uniformly multimodal: the flag
+    // must be read per row rather than assumed from membership.
     const modalities = new Map(models.map(model => [model.id, model.inputModalities]))
     expect(modalities.get('hy3')).toContain('image')
-    expect(modalities.get('glm-5.1')).toContain('image')
+    expect(modalities.get('glm-5.3')).toContain('image')
+    expect(modalities.get('glm-5.1')).not.toContain('image')
+    expect(modalities.get('glm-5.2')).not.toContain('image')
 
     // A settings write validates against the schema and persists.
     await ctx.settings.update(WorkBuddy.WORKBUDDY_SETTINGS_NS, { authFile: '/tmp/other-workbuddy.info' })
@@ -349,8 +353,8 @@ describe('WorkBuddy Host settings integration', () => {
     // declared efforts).
     const cn = (await ctx.llm.listModels('workbuddy')).map(model => model.id)
     const ai = (await ctx.llm.listModels('workbuddy-ai')).map(model => model.id)
-    expect(cn).toContain('minimax-m3')
-    expect(ai).not.toContain('minimax-m3')
+    expect(cn).toContain('minimax-m3-pay')
+    expect(ai).not.toContain('minimax-m3-pay')
     expect(ai).toContain('gpt-5.6-luna')
     expect(cn).not.toContain('gpt-5.6-luna')
 

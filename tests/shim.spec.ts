@@ -95,8 +95,8 @@ describe('WorkBuddy shim', () => {
     const ids = body.data.map(model => model.id)
     expect(ids).toContain('hy3')
     expect(ids).toContain('deepseek-v4-pro')
-    // The fallback roster tracks the live `cli` agent's 16 models.
-    expect(ids.length).toBe(16)
+    // The fallback roster tracks the live `cli` agent's 19 models.
+    expect(ids.length).toBe(19)
     expect(ids).toContain('hy4-preview')
     expect(ids).toContain('glm-5.3')
   })

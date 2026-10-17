@@ -50,6 +50,16 @@ describe('package version sync', () => {
       `no built bundle declares WORKBUDDY_CONNECT_VERSION as "${pkg.version}" — rebuild before committing or publishing`,
     ).not.toHaveLength(0)
   })
+
+  it('built bundles need no runtime import of the atomic-write helper', () => {
+    const libDir = new URL('../lib/', import.meta.url)
+    if (!existsSync(libDir)) return
+    for (const name of readdirSync(libDir).filter(name => name.endsWith('.js'))) {
+      const source = readFileSync(new URL(`../lib/${name}`, import.meta.url), 'utf8')
+      expect(source, `${name} still requires the host atomic-write package`)
+        .not.toMatch(/(?:from\s*|import\s*\(|require\s*\()\s*['"]@deepseek-ai\/dsh-atomic-write['"]/)
+    }
+  })
 })
 
 describe('peer manifest pins the verified DSH cores', () => {
@@ -59,9 +69,11 @@ describe('peer manifest pins the verified DSH cores', () => {
    * nobody verified. Since 0.7.0 the seven DSH service peers are pinned to
    * exactly the cores this release was smoke-tested on; extending support
    * means editing this list after a real run, not letting a caret do it.
-   * Since 0.7.7 the list is 0.2.1-rc.1 alone: 0.2.0-rc.2 cannot be
+   * Since 0.7.7 the list was 0.2.1-rc.1 alone: 0.2.0-rc.2 cannot be
    * smoke-tested anymore alongside it, and an untested arm is support
-   * nobody verified.
+   * nobody verified. This candidate targets 0.2.1-rc.2 and bundles the
+   * official atomic-write helper. Local checks do not replace Desktop
+   * acceptance testing.
    *
    * #74's lesson on top of it: pi-ai must NOT be a dual-arm range. An
    * in-place upgrade from a 0.6.x-era pnpm profile keeps satisfying
@@ -74,7 +86,6 @@ describe('peer manifest pins the verified DSH cores', () => {
    * dependency now; the assertion below pins that shape.
    */
   const DSH_SERVICE_PEERS = [
-    '@deepseek-ai/dsh-atomic-write',
     '@deepseek-ai/dsh-attachment',
     '@deepseek-ai/dsh-home-paths',
     '@deepseek-ai/dsh-host-webserver',
@@ -88,8 +99,18 @@ describe('peer manifest pins the verified DSH cores', () => {
       readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
     ) as { peerDependencies: Record<string, string> }
     for (const name of DSH_SERVICE_PEERS) {
-      expect(pkg.peerDependencies[name], `${name} missing from peerDependencies`).toBe('0.2.1-rc.1')
+      expect(pkg.peerDependencies[name], `${name} missing from peerDependencies`).toBe('0.2.1-rc.2')
     }
+  })
+
+  it('bundles the official atomic-write helper instead of requiring a host peer', () => {
+    // The Desktop report could not resolve this peer. Keep the official
+    // implementation and include it in lib so runtime resolution is unnecessary.
+    const pkg = JSON.parse(
+      readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { peerDependencies: Record<string, string>, devDependencies: Record<string, string> }
+    expect(pkg.devDependencies['@deepseek-ai/dsh-atomic-write']).toBe('0.2.1-rc.2')
+    expect(pkg.peerDependencies['@deepseek-ai/dsh-atomic-write']).toBeUndefined()
   })
 
   it('pi-ai is a pinned runtime dependency, not a peer', () => {
