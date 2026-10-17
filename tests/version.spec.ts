@@ -59,9 +59,12 @@ describe('peer manifest pins the verified DSH cores', () => {
    * nobody verified. Since 0.7.0 the seven DSH service peers are pinned to
    * exactly the cores this release was smoke-tested on; extending support
    * means editing this list after a real run, not letting a caret do it.
-   * Since 0.7.7 the list is 0.2.1-rc.1 alone: 0.2.0-rc.2 cannot be
+   * Since 0.7.7 the list was 0.2.1-rc.1 alone: 0.2.0-rc.2 cannot be
    * smoke-tested anymore alongside it, and an untested arm is support
-   * nobody verified.
+   * nobody verified. This build moves the pin to 0.2.1-rc.2, the core it was
+   * actually built and loaded against, and drops `dsh-atomic-write`: 0.2.1
+   * no longer exposes that package to plugins, so the write path is
+   * implemented in-repo (`src/atomic-write.ts`) instead of peer-declared.
    *
    * #74's lesson on top of it: pi-ai must NOT be a dual-arm range. An
    * in-place upgrade from a 0.6.x-era pnpm profile keeps satisfying
@@ -74,7 +77,6 @@ describe('peer manifest pins the verified DSH cores', () => {
    * dependency now; the assertion below pins that shape.
    */
   const DSH_SERVICE_PEERS = [
-    '@deepseek-ai/dsh-atomic-write',
     '@deepseek-ai/dsh-attachment',
     '@deepseek-ai/dsh-home-paths',
     '@deepseek-ai/dsh-host-webserver',
@@ -88,8 +90,19 @@ describe('peer manifest pins the verified DSH cores', () => {
       readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
     ) as { peerDependencies: Record<string, string> }
     for (const name of DSH_SERVICE_PEERS) {
-      expect(pkg.peerDependencies[name], `${name} missing from peerDependencies`).toBe('0.2.1-rc.1')
+      expect(pkg.peerDependencies[name], `${name} missing from peerDependencies`).toBe('0.2.1-rc.2')
     }
+  })
+
+  it('does not peer-declare the atomic-write helper the core stopped exposing', () => {
+    // 0.2.1 keeps `dsh-atomic-write` inside its own bundle and resolves it for
+    // plugins no longer; a peer on it would fail at install and leave the
+    // dependency tree unsynced (the profile then cannot resolve any
+    // `@deepseek-ai/*`). The in-repo implementation replaces it.
+    const pkg = JSON.parse(
+      readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { peerDependencies: Record<string, string> }
+    expect(pkg.peerDependencies['@deepseek-ai/dsh-atomic-write']).toBeUndefined()
   })
 
   it('pi-ai is a pinned runtime dependency, not a peer', () => {

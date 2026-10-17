@@ -196,6 +196,18 @@ export interface WorkBuddyWebModelBadge {
    */
   rateUnknown?: true
   /**
+   * Reasoning levels the catalogue itself declares, when it declares any.
+   *
+   * The probe section shows these when a detection cannot decide (the upstream
+   * ignored the sentinel effort): "we could not measure it" is a different
+   * message from "nothing is known", and the declared levels are already in
+   * hand, so the card does not have to send another request to say something
+   * useful.
+   */
+  declaredEfforts?: readonly string[]
+  /** The level the upstream applies when a request names none. */
+  defaultEffort?: string
+  /**
    * Context capacity in tokens, taken verbatim from the upstream
    * `maxAllowedSize`/`maxInputTokens`, or from the international document's
    * `contextWindow.defaultLength` when it declares one.

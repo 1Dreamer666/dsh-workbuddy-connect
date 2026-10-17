@@ -20,7 +20,7 @@
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
+import { writeFileAtomic } from './atomic-write.ts'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
 /**

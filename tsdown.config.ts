@@ -44,7 +44,6 @@ export default [
         '@earendil-works/pi-ai',
         '@deepseek-ai/schemastery',
         '@deepseek-ai/cordis',
-        '@deepseek-ai/dsh-atomic-write',
         '@deepseek-ai/dsh-attachment',
         '@deepseek-ai/dsh-home-paths',
         '@deepseek-ai/dsh-host-webserver',
