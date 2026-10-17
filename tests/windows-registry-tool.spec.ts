@@ -13,7 +13,7 @@ import {
 
 type RegistryFailure = Error & { code: number | string, killed?: boolean }
 
-function registryFailure(stderr: string, killed = false): void {
+function registryFailure(stderr: string | Buffer, killed = false): void {
   execFileMock.mockImplementation((
     _binary: string,
     _args: string[],
@@ -22,8 +22,9 @@ function registryFailure(stderr: string, killed = false): void {
   ) => {
     const child = new EventEmitter()
     const error = Object.assign(new Error('reg query failed'), { code: 1, killed })
+    const stderrBytes = typeof stderr === 'string' ? Buffer.from(stderr, 'utf8') : stderr
     queueMicrotask(() => {
-      callback(error, Buffer.alloc(0), Buffer.from(stderr, 'utf8'))
+      callback(error, Buffer.alloc(0), stderrBytes)
       child.emit('close')
     })
     return child
@@ -84,6 +85,24 @@ describe('Windows registry query failure classification', () => {
   ])('treats a confirmed missing key as an empty result: %s', async stderr => {
     vi.stubEnv('SystemRoot', 'C:\\Windows')
     registryFailure(stderr)
+    await expect(workBuddyWindowsDiscoveryTools().queryUninstallRoot('HKCU\\Missing', new AbortController().signal))
+      .resolves.toBe('')
+    expect(execFileMock).toHaveBeenCalledTimes(1)
+  })
+
+  // A real zh-CN console answers reg.exe in the OEM code page (cp936/GBK), not
+  // UTF-8. The strings above arrive as UTF-8 through the harness, so they
+  // cannot catch the production bug this pins: UTF-8 decoding of GBK bytes is
+  // mojibake that matched no diagnostic, turning every absent root on a
+  // Chinese-locale Windows into "discovery incomplete". The byte arrays below
+  // are the two colon variants of 错误(：)系统找不到指定的注册表项或值(。) as
+  // cp936 emits them.
+  it.each([
+    Buffer.from([0xb4, 0xed, 0xce, 0xf3, 0x3a, 0x20, 0xcf, 0xb5, 0xcd, 0xb3, 0xd5, 0xd2, 0xb2, 0xbb, 0xb5, 0xbd, 0xd6, 0xb8, 0xb6, 0xa8, 0xb5, 0xc4, 0xd7, 0xa2, 0xb2, 0xe1, 0xb1, 0xed, 0xcf, 0xee, 0xbb, 0xf2, 0xd6, 0xb5, 0xa1, 0xa3]),
+    Buffer.from([0xb4, 0xed, 0xce, 0xf3, 0xa3, 0xba, 0xcf, 0xb5, 0xcd, 0xb3, 0xd5, 0xd2, 0xb2, 0xbb, 0xb5, 0xbd, 0xd6, 0xb8, 0xb6, 0xa8, 0xb5, 0xc4, 0xd7, 0xa2, 0xb2, 0xe1, 0xb1, 0xed, 0xcf, 0xee, 0xbb, 0xf2, 0xd6, 0xb5, 0xa1, 0xa3]),
+  ])('treats the GBK-encoded zh-CN missing-key diagnostic as missing', async stderrBytes => {
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    registryFailure(stderrBytes)
     await expect(workBuddyWindowsDiscoveryTools().queryUninstallRoot('HKCU\\Missing', new AbortController().signal))
       .resolves.toBe('')
     expect(execFileMock).toHaveBeenCalledTimes(1)

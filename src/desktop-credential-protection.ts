@@ -850,7 +850,7 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
       // that is not one of them stays incomplete, as before.
       if (error !== null && error !== undefined) {
         if (error.killed !== true && (error.code === 1 || error.code === '1')
-          && windowsRegistryKeyMissing(stderr.toString('utf8'))) {
+          && windowsRegistryKeyMissingFromBytes(stderr)) {
           resolve(Buffer.alloc(0))
           return
         }
@@ -1435,6 +1435,26 @@ function windowsRegistryKeyMissing(stderr: string): boolean {
   const detail = stderr.trim()
   return /^ERROR:\s*The system was unable to find the specified registry key or value\.?$/iu.test(detail)
     || /^错误[:：]\s*系统找不到指定的注册表项或值[。.]?$/u.test(detail)
+}
+
+/**
+ * Reg.exe speaks the console OEM code page, not UTF-8: on a zh-CN install the
+ * missing-key diagnostic arrives as cp936 bytes, which UTF-8 decoding turns
+ * into mojibake no diagnostic regex can match — the query then reads as
+ * "incomplete" on every absent root. Extension of #88's byte-level principle:
+ * the bytes decide, so decode as UTF-8 first and then as GBK. ASCII — every
+ * English diagnostic — is identical under both, so a match is unambiguous and
+ * recognition only ever widens; a genuine failure (access denied, unknown
+ * diagnostics) still stays incomplete in either decode.
+ */
+function windowsRegistryKeyMissingFromBytes(stderr: Buffer): boolean {
+  if (windowsRegistryKeyMissing(stderr.toString('utf8'))) return true
+  try {
+    return windowsRegistryKeyMissing(new TextDecoder('gbk').decode(stderr))
+  } catch {
+    // A runtime without full ICU cannot decode GBK; stay with UTF-8 only.
+    return false
+  }
 }
 
 /**
