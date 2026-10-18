@@ -165,8 +165,10 @@ dsh plugin --profile web exec dsh-workbuddy-connect doctor --provider workbuddy-
 
 - **[HanaAgent](https://github.com/liliMozi/openhanako)**：独立的个人 AI Agent 项目。
 - **[hana-workbuddy-connect](https://github.com/miaoyongxu/hana-workbuddy-connect)**：社区维护的非官方适配项目，复用 `dsh-workbuddy-connect` 的部分实现，为 HanaAgent 接入 WorkBuddy / WorkBuddy AI 模型。
+- **[dsh-workbuddy-switcher](https://github.com/ddGuo/dsh-workbuddy-switcher)**：社区维护的 WorkBuddy 账号管理与切换插件。
+- **[dsh-buddy-checkin](https://github.com/corrinehu/dsh-buddy-checkin)**：本项目作者维护的 WorkBuddy 国内版每日签到插件。
 
-以上项目均由第三方独立维护。其中，`hana-workbuddy-connect` 的兼容性、安全性及使用支持由其维护者负责。收录不代表官方背书，也不意味着本插件对内部接口提供稳定性或兼容性承诺。
+适用版本与安装要求请参阅各项目说明。除 `dsh-buddy-checkin` 外，以上项目均由第三方独立维护；收录不代表官方背书，也不构成本插件内部接口的稳定性或兼容性承诺。
 
 ## 致谢
 

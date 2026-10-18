@@ -164,8 +164,10 @@ Pinned-version install example: `dsh plugin --profile web add dsh-workbuddy-conn
 
 - **[HanaAgent](https://github.com/liliMozi/openhanako)**: an independent personal AI Agent project.
 - **[hana-workbuddy-connect](https://github.com/miaoyongxu/hana-workbuddy-connect)**: a community-maintained unofficial adapter project that reuses parts of the `dsh-workbuddy-connect` implementation to bring WorkBuddy / WorkBuddy AI models to HanaAgent.
+- **[dsh-workbuddy-switcher](https://github.com/ddGuo/dsh-workbuddy-switcher)**: a community-maintained WorkBuddy account management and switching plugin.
+- **[dsh-buddy-checkin](https://github.com/corrinehu/dsh-buddy-checkin)**: a daily check-in plugin for the WorkBuddy China edition, maintained by this project's author.
 
-Both projects are maintained independently by third parties. The compatibility, security, and usage support of `hana-workbuddy-connect` are the responsibility of its maintainer. Listing them here is not an official endorsement, nor does it imply any stability or compatibility commitment on this plugin's internal interfaces.
+See each project's documentation for supported versions and installation requirements. Except for `dsh-buddy-checkin`, these projects are independently maintained by third parties. Listing them here is not an official endorsement or a stability or compatibility commitment for this plugin's internal interfaces.
 
 ## Acknowledgements
 
