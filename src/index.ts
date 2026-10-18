@@ -953,39 +953,138 @@ export function apply(ctx: Context, config: Config): void {
     const modern = modernSettingsOf(settingsCtx.settings)
     if (modern !== undefined) {
       settingsAvailable = true
+      /**
+       * The live preference as the host's own Config reports it.
+       *
+       * The forms layer is the single source of truth on a 0.2.x host: a write
+       * lands in the profile document and comes back through `describe()`, so
+       * nothing has to be mirrored in memory here (and a mirror is exactly how
+       * runtime and saved state drift apart). The persisted default already
+       * applies — the preference field defaults to `true` and the composition
+       * handed this plugin its resolved `config`.
+       */
       let liveConfig: Config = { ...config }
-      const applyMaximumContextWindow = (enabled: boolean): void => {
-        liveConfig = { ...liveConfig, useMaximumContextWindow: enabled }
-        current = () => liveConfig
-        const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
-        if (runtime?.catalog.setUseMaximumContextWindow(enabled)) runtime.invalidate()
-      }
-
-      const findEntryNs = (): string => {
+      /** Whether {@link liveConfig} came from a settings descriptor (see below). */
+      let liveConfigBound = false
+      /**
+       * Read this plugin's own entry out of the host's forms.
+       *
+       * The namespace on a 0.2.x host is the *profile entry id* — not the
+       * `SettingsNamespace` the 0.1.x sections were installed under — so it is
+       * whatever the user named this plugin in `cordis.yml`. Matching on the
+       * schema alone would find any neighbouring entry that happens to declare
+       * a `useMaximumContextWindow` field and write the preference into a
+       * plugin that does not own it, so the field is only ever a *tie-break*
+       * among entries that already proved they are this plugin.
+       *
+       * Identity comes from the same facts the loader itself keys an entry by:
+       * the schema handed out is this module's {@link Config} (`describe()`
+       * returns the plugin's live `Config` as `schema`), and the entry's fiber
+       * is the plugin instance that injected `settings` — the context this
+       * inject body runs under. Anything unmatched answers `undefined`; there
+       * is no guessed fallback, because a wrong guess silently writes another
+       * plugin's configuration.
+       */
+      const settingsEntryId = (): string | undefined => {
         try {
           const descriptors = modern.describe()
-          const match = descriptors.find(desc => {
-            if (desc.ns === 'llm-workbuddy' || desc.ns === 'dsh-workbuddy-connect') return true
-            const schema = desc.schema as { dict?: Record<string, unknown> } | undefined
-            return schema?.dict !== undefined && 'useMaximumContextWindow' in schema.dict
-          })
-          if (match !== undefined) return match.ns
-        } catch {
-          // fall back to default profile entry id
+          // 1. Direct schema identity (exact match with exported Config)
+          const bySchema = descriptors.filter(desc => desc.schema === Config)
+          if (bySchema.length > 0) return bySchema[0]?.ns
+
+          // 2. Exact package entry id ('dsh-workbuddy-connect')
+          const byPackageName = descriptors.find(desc => desc.ns === 'dsh-workbuddy-connect')
+          if (byPackageName !== undefined) return byPackageName.ns
+
+          // 3. A wrapper schema defeats the identity check above; the producing
+          // fiber does not. Never the field name alone.
+          const fiber = (ctx as unknown as { reflect?: { _getImpl?: (name: string) => { fiber?: unknown } | undefined } })
+            .reflect?._getImpl?.('settings')?.fiber
+          if (fiber !== undefined) {
+            const match = descriptors.find(desc => (desc as { fiber?: unknown }).fiber === fiber)
+            if (match !== undefined) return match.ns
+          }
+        } catch (error: unknown) {
+          ctx.logger.warn('dsh-workbuddy-connect: reading this plugin\'s settings entry failed: %s', error)
         }
-        return 'llm-workbuddy'
+        return undefined
+      }
+
+      /**
+       * Apply whatever the settings document now says.
+       *
+       * The value read is the descriptor's `value` — the projection of the live
+       * fiber config, i.e. what the loader actually resolved — rather than
+       * `user`, which names only the profile's own section and would miss an
+       * inherited or default value that is nonetheless in effect.
+       */
+      const applyModernConfig = (): void => {
+        if (!liveConfigBound) return
+        const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
+        if (runtime?.catalog.setUseMaximumContextWindow(liveConfig.useMaximumContextWindow === true)) runtime.invalidate()
       }
 
       setMaximumContextWindow = async enabled => {
-        applyMaximumContextWindow(enabled)
-        const ns = findEntryNs()
+        const ns = settingsEntryId()
+        // No guessing: a host that does not serve this plugin's entry cannot
+        // store the preference, and reporting success would be a lie.
+        if (ns === undefined) return { state: 'failed', reason: 'no configurable settings entry for this plugin' }
+        // Persist first, then apply — the order `setModelVisibility` below
+        // already uses. Applying the catalog before the write would advertise
+        // a window the profile does not carry after a restart if the write
+        // failed.
         try {
           await modern.update(ns, { useMaximumContextWindow: enabled })
-        } catch (error) {
-          ctx.logger.warn('dsh-workbuddy-connect: modern settings update failed for %s: %s', ns, error)
+          // Trust the write only once the document agrees. A write that
+          // resolves but leaves the value untouched (a no-op host adapter)
+          // must not be reported as saved.
+          const after = modern.describe().find(entry => entry.ns === ns)
+          const stored = (after?.value as { useMaximumContextWindow?: unknown } | undefined)?.useMaximumContextWindow
+          if (stored !== enabled) {
+            return { state: 'failed', reason: 'the settings document did not accept the context-window preference' }
+          }
+        } catch (error: unknown) {
+          // A toggle that did not persist must not be reported as saved, and
+          // the runtime keeps the value it actually has.
+          return { state: 'failed', reason: error instanceof Error ? error.message.slice(0, 300) : String(error) }
         }
+        liveConfig = { ...liveConfig, useMaximumContextWindow: enabled }
+        current = () => liveConfig
+        applyModernConfig()
         return { state: 'updated' }
       }
+
+      // Bind the stored preference — the constructor's `config` is the
+      // resolved field set, and a missing descriptor simply leaves the default
+      // in effect.
+      try {
+        const ns = settingsEntryId()
+        const entry = ns === undefined ? undefined : modern.describe().find(desc => desc.ns === ns)
+        const stored = (entry?.value as { useMaximumContextWindow?: unknown } | undefined)?.useMaximumContextWindow
+        liveConfig = { ...config, ...stored === undefined ? {} : { useMaximumContextWindow: stored === true } }
+        liveConfigBound = true
+        current = () => liveConfig
+        applyModernConfig()
+      } catch (error: unknown) {
+        ctx.logger.warn('dsh-workbuddy-connect: reading the stored context-window preference failed: %s', error)
+      }
+      // Pages and CLI clients that already read the status document re-render
+      // from it; the settings service announces every accepted write, so the
+      // card reflects edits made elsewhere (a native config editor, the CLI)
+      // without polling.
+      ctx.effect(() => ctx.on('settings/document-updated', (ns: string) => {
+        try {
+          const own = settingsEntryId()
+          if (own === undefined || (ns !== undefined && ns !== own)) return
+          const entry = modern.describe().find(desc => desc.ns === own)
+          const stored = (entry?.value as { useMaximumContextWindow?: unknown } | undefined)?.useMaximumContextWindow
+          if (stored === undefined) return
+          liveConfig = { ...liveConfig, useMaximumContextWindow: stored === true }
+          applyModernConfig()
+        } catch {
+          // A host that rejects the read keeps the value already in effect.
+        }
+      }) as () => void)
       return
     }
 
