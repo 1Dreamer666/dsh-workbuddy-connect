@@ -77,3 +77,30 @@ export function legacySettingsOf(settings: unknown): LegacySettingsApi | undefin
   if (typeof candidate.update !== 'function') return undefined
   return settings as unknown as LegacySettingsApi
 }
+
+/** One descriptor returned by modern DSH 0.2.x SettingsForms.describe(). */
+export interface ModernSettingsDescriptor {
+  ns: string
+  schema?: unknown
+  value?: unknown
+}
+
+/** The modern DSH 0.2.x settings service (SettingsForms from @deepseek-ai/dsh-settings). */
+export interface ModernSettingsApi {
+  describe(options?: unknown): readonly ModernSettingsDescriptor[]
+  update(ns: string, patch: object, expectedRevision?: number): Promise<void>
+}
+
+/**
+ * Narrow one host settings service to the modern DSH 0.2.x SettingsForms API, or
+ * `undefined` when this host's generation does not carry it.
+ */
+export function modernSettingsOf(settings: unknown): ModernSettingsApi | undefined {
+  if (typeof settings !== 'object' || settings === null) return undefined
+  const candidate = settings as { installSection?: unknown; describe?: unknown; update?: unknown }
+  // A service carrying installSection is the legacy section API; do not treat it as modern
+  if (typeof candidate.installSection === 'function') return undefined
+  if (typeof candidate.describe !== 'function') return undefined
+  if (typeof candidate.update !== 'function') return undefined
+  return settings as unknown as ModernSettingsApi
+}

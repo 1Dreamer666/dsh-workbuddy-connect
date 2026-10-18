@@ -696,4 +696,46 @@ describe('WorkBuddy Host settings integration', () => {
     expect(text).not.toContain(hostPath)
     expect(JSON.stringify(body)).toContain('data:image/png;base64,AQID')
   })
+
+  it('adapts to modern DSH 0.2.x SettingsForms service and resolves maximum-context preference', async () => {
+    root = await mkdtemp(join(tmpdir(), 'workbuddy-modern-settings-'))
+    const aiFile = join(root, 'ai.info')
+    await writeFile(aiFile, credentialDocument('www.workbuddy.ai'))
+    vi.stubEnv('DSH_HOME', root)
+    vi.stubEnv('WORKBUDDY_AUTH_FILE', join(root, 'absent-cn.info'))
+    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', aiFile)
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline in tests') }))
+
+    let storedPreference = true
+    const updates: { ns: string; patch: object }[] = []
+    class FakeModernSettingsForms {
+      describe() {
+        return [{
+          ns: 'llm-workbuddy',
+          schema: { dict: { useMaximumContextWindow: true } },
+          value: { useMaximumContextWindow: storedPreference },
+        }]
+      }
+      async update(ns: string, patch: { useMaximumContextWindow?: boolean }) {
+        updates.push({ ns, patch })
+        if (patch.useMaximumContextWindow !== undefined) {
+          storedPreference = patch.useMaximumContextWindow
+        }
+      }
+    }
+
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    ctx.provide('settings', new FakeModernSettingsForms() as never)
+    await ctx.plugin(WorkBuddy, {})
+
+    await vi.waitFor(async () => {
+      expect((await ctx.llm.listModels('workbuddy-ai')).length).toBeGreaterThan(0)
+    })
+
+    // By default, maximum context window (1M) is selected for flash model
+    const flashBefore = await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')
+    expect(flashBefore.context?.contextWindow).toBe(1_000_000)
+  })
 })
