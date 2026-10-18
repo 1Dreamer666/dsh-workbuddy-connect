@@ -860,7 +860,7 @@ interface WorkBuddyAtRestKeyProviderOptions {
    * Windows environment variable registry reader, for testing and dynamic
    * fallback when `process.env` lacks the variable.
    */
-  readWindowsUserEnv?: (varName: string) => string | undefined;
+  readWindowsUserEnv?: (varName: string) => Promise<string | undefined> | string | undefined;
   /** Platform override for deterministic discovery tests. */
   platform?: NodeJS.Platform;
   /**
@@ -896,6 +896,11 @@ declare class WorkBuddyAtRestKeyProvider {
   private readonly tools;
   private readonly windowsTools;
   private readonly readWindowsUserEnv;
+  /**
+   * Cached Windows user environment query result, so we only read the registry
+   * at most once per key provider instance.
+   */
+  private userEnvCache?;
   private readonly platform;
   private readonly discoveryBudgetMs;
   private readonly timeoutMs;

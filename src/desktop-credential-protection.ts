@@ -25,7 +25,7 @@
  * @module dsh-workbuddy-connect/desktop-credential-protection
  */
 
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { accessSync, constants, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
@@ -613,7 +613,7 @@ export interface WorkBuddyAtRestKeyProviderOptions {
    * Windows environment variable registry reader, for testing and dynamic
    * fallback when `process.env` lacks the variable.
    */
-  readWindowsUserEnv?: (varName: string) => string | undefined
+  readWindowsUserEnv?: (varName: string) => Promise<string | undefined> | string | undefined
   /** Platform override for deterministic discovery tests. */
   platform?: NodeJS.Platform
   /**
@@ -1027,32 +1027,61 @@ function parseWindowsUninstallJson(output: string): string | undefined {
 }
 
 /**
+ * Expand Windows %VARIABLE% placeholders using current process environment.
+ */
+export function expandWindowsEnv(raw: string, env: NodeJS.ProcessEnv = process.env): string {
+  return raw.replace(/%([^%]+)%/gu, (match, name: string) => {
+    // Windows environment variables are case-insensitive
+    const key = Object.keys(env).find(k => k.toLowerCase() === name.toLowerCase())
+    return (key !== undefined && env[key] !== undefined) ? env[key]! : match
+  })
+}
+
+/** Options for {@link readWindowsRegistryUserEnv}. */
+export interface WindowsRegistryUserEnvOptions {
+  systemRoot?: string
+  timeoutMs?: number
+  exec?: (file: string, args: string[], options: { windowsHide: boolean; encoding: 'buffer'; timeout: number }) => Promise<Buffer>
+}
+
+/**
  * Read one user environment variable directly from the Windows registry (`HKCU\Environment`).
  *
  * Windows environment changes broadcast `WM_SETTINGCHANGE`, but existing processes
  * (including a running DSH host) do not automatically reload their inherited `process.env`.
  * This function queries `HKCU\Environment` (and the system environment as a fallback)
- * synchronously via `reg.exe` when running on Windows, providing a live fallback when
- * `process.env` lacks the variable.
+ * asynchronously via `reg.exe` with a bounded timeout when running on Windows, providing
+ * a non-blocking fallback when `process.env` lacks the variable.
  */
-export function readWindowsRegistryUserEnv(varName: string): string | undefined {
-  if (process.platform !== 'win32') return undefined
-  const systemRoot = process.env.SystemRoot?.trim()
+export async function readWindowsRegistryUserEnv(
+  varName: string,
+  options: WindowsRegistryUserEnvOptions = {},
+): Promise<string | undefined> {
+  if (process.platform !== 'win32' && options.exec === undefined) return undefined
+  const systemRoot = options.systemRoot ?? process.env.SystemRoot?.trim()
   const regPath = systemRoot === undefined || systemRoot === ''
     ? undefined
     : join(systemRoot, 'System32', 'reg.exe')
   if (regPath === undefined) return undefined
+
+  const timeoutMs = options.timeoutMs ?? 1500
+  const exec = options.exec ?? ((file: string, args: string[], opts: { windowsHide: boolean; encoding: 'buffer'; timeout: number }) => new Promise<Buffer>((resolve, reject) => {
+    execFile(file, args, { windowsHide: opts.windowsHide, encoding: 'buffer', timeout: opts.timeout }, (error: unknown, stdout: unknown) => {
+      if (error) reject(error)
+      else resolve(stdout as Buffer)
+    })
+  }))
+
   const roots = [
     'HKCU\\Environment',
     'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment',
   ]
   for (const root of roots) {
     try {
-      const raw = execFileSync(regPath, ['query', root, '/v', varName], {
+      const raw = await exec(regPath, ['query', root, '/v', varName], {
         windowsHide: true,
         encoding: 'buffer',
-        timeout: 3000,
-        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: timeoutMs,
       })
       let text = raw.toString('utf8')
       if (/[\uFFFD]/u.test(text)) {
@@ -1062,13 +1091,17 @@ export function readWindowsRegistryUserEnv(varName: string): string | undefined 
           // stay with utf8
         }
       }
-      const match = new RegExp(`^\\s*${varName}\\s+REG_[A-Z0-9_]+\\s+(.*)$`, 'imu').exec(text)
-      if (match !== null && match[1] !== undefined) {
-        const val = match[1].trim()
+      const match = new RegExp(`^\\s*${varName}\\s+(REG_[A-Z0-9_]+)\\s+(.*)$`, 'imu').exec(text)
+      if (match !== null && match[1] !== undefined && match[2] !== undefined) {
+        const type = match[1].toUpperCase()
+        let val = match[2].trim()
+        if (type === 'REG_EXPAND_SZ') {
+          val = expandWindowsEnv(val)
+        }
         if (val !== '') return val
       }
     } catch {
-      // Missing key or value: continue
+      // Missing key or value or timeout: continue
     }
   }
   return undefined
@@ -1092,7 +1125,12 @@ export class WorkBuddyAtRestKeyProvider {
   private readonly discovery: WorkBuddyElectronDiscovery
   private readonly tools: WorkBuddyDiscoveryTools
   private readonly windowsTools: WorkBuddyWindowsDiscoveryTools
-  private readonly readWindowsUserEnv: (varName: string) => string | undefined
+  private readonly readWindowsUserEnv: (varName: string) => Promise<string | undefined> | string | undefined
+  /**
+   * Cached Windows user environment query result, so we only read the registry
+   * at most once per key provider instance.
+   */
+  private userEnvCache?: { value: string | undefined }
   private readonly platform: NodeJS.Platform
   private readonly discoveryBudgetMs: number
   private readonly timeoutMs: number
@@ -1226,9 +1264,25 @@ export class WorkBuddyAtRestKeyProvider {
         + ` set ${this.product.envVar} to the app's Electron binary`,
       )
     }
-    // On Windows, if process.env lacked the explicit variable, check the user environment in the registry before full search
+    // Priority order:
+    // 1. The default path is the ordinary case and costs one stat; discovery is
+    // reserved for the installations the default misses.
+    if (this.defaultPath !== undefined && isExecutable(this.defaultPath)) return this.defaultPath
+    // 2. A previously discovered path is re-checked rather than trusted: the app
+    // may have been moved or removed since, and a stale path must not win.
+    if (this.discoveredPath !== undefined) {
+      if (isExecutable(this.discoveredPath)) return this.discoveredPath
+      this.discoveredPath = undefined
+    }
+    // 3. Fallback: on Windows, if process.env lacked the explicit variable,
+    // check the user environment in the registry asynchronously with limited budget
+    // and caching before falling back to full registry discovery.
     if (this.platform === 'win32' && !(this.product.envVar in process.env)) {
-      const dynamicEnv = this.readWindowsUserEnv(this.product.envVar)
+      if (this.userEnvCache === undefined) {
+        const raw = await this.readWindowsUserEnv(this.product.envVar)
+        this.userEnvCache = { value: raw?.trim() }
+      }
+      const dynamicEnv = this.userEnvCache.value
       if (dynamicEnv !== undefined && dynamicEnv !== '') {
         if (!isExecutable(dynamicEnv)) {
           throw new WorkBuddyElectronPathError(
@@ -1241,15 +1295,7 @@ export class WorkBuddyAtRestKeyProvider {
         return dynamicEnv
       }
     }
-    // The default path is the ordinary case and costs one stat; discovery is
-    // reserved for the installations the default misses.
-    if (this.defaultPath !== undefined && isExecutable(this.defaultPath)) return this.defaultPath
-    // A previously discovered path is re-checked rather than trusted: the app
-    // may have been moved or removed since, and a stale path must not win.
-    if (this.discoveredPath !== undefined) {
-      if (isExecutable(this.discoveredPath)) return this.discoveredPath
-      this.discoveredPath = undefined
-    }
+    // 4. Candidate discovery across registry uninstall roots.
     const found = this.discovery === 'macos-workbuddy'
       ? await this.discoverMacosApp()
       : await this.discoverWindowsApp()
