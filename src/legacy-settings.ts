@@ -83,6 +83,8 @@ export interface ModernSettingsDescriptor {
   ns: string
   schema?: unknown
   value?: unknown
+  /** Optimistic-concurrency token a write may hand back to `update()`. */
+  revision?: number
 }
 
 /** The modern DSH 0.2.x settings service (SettingsForms from @deepseek-ai/dsh-settings). */

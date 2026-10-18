@@ -1,13 +1,47 @@
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm/brand'
+import z from '@deepseek-ai/schemastery'
 import * as WorkBuddy from '../src/index.ts'
 import { LegacySettingsService } from './helpers/legacy-settings.ts'
+import { ModernSettingsForms } from './helpers/modern-settings.ts'
+
+/**
+ * Stands in for the Host's webServer service so the plugin's status and probe
+ * routes are callable over loopback HTTP in integration tests.
+ */
+class FakeWebServer extends Service {
+  static current: FakeWebServer | undefined
+  readonly routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>()
+
+  constructor(ctx: Context) {
+    super(ctx, 'webServer')
+    FakeWebServer.current = this
+  }
+
+  register(route: { kind: string; path: string; handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }): () => void {
+    this.routes.set(route.path, route.handler)
+    return () => { this.routes.delete(route.path) }
+  }
+}
+
+/** Serve captured routes over ephemeral HTTP. */
+async function serve(routes: Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>): Promise<{ port: number; close: () => Promise<void> }> {
+  const server = createServer((req, res) => {
+    const handler = routes.get(new URL(req.url ?? '/', 'http://127.0.0.1').pathname)
+    if (handler === undefined) { res.writeHead(404).end('{}'); return }
+    void handler(req, res)
+  })
+  await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve) })
+  const port = (server.address() as { port: number }).port
+  return { port, close: () => new Promise<void>(resolve => { server.close(() => resolve()) }) }
+}
 
 /**
  * In-memory legacy settings: the 0.1.5/0.1.6 section API this plugin drives.
@@ -697,45 +731,207 @@ describe('WorkBuddy Host settings integration', () => {
     expect(JSON.stringify(body)).toContain('data:image/png;base64,AQID')
   })
 
-  it('adapts to modern DSH 0.2.x SettingsForms service and resolves maximum-context preference', async () => {
+  it('adapts to modern DSH 0.2.x SettingsForms service: toggles preference, persists to target entry, reports failure accurately, and restores after reload', async () => {
     root = await mkdtemp(join(tmpdir(), 'workbuddy-modern-settings-'))
     const aiFile = join(root, 'ai.info')
     await writeFile(aiFile, credentialDocument('www.workbuddy.ai'))
     vi.stubEnv('DSH_HOME', root)
     vi.stubEnv('WORKBUDDY_AUTH_FILE', join(root, 'absent-cn.info'))
     vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', aiFile)
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline in tests') }))
+    const realFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (String(url).startsWith('http://127.0.0.1')) return realFetch(url, init)
+      throw new Error('offline in tests')
+    }))
 
-    let storedPreference = true
-    const updates: { ns: string; patch: object }[] = []
-    class FakeModernSettingsForms {
-      describe() {
-        return [{
-          ns: 'llm-workbuddy',
-          schema: { dict: { useMaximumContextWindow: true } },
-          value: { useMaximumContextWindow: storedPreference },
-        }]
-      }
-      async update(ns: string, patch: { useMaximumContextWindow?: boolean }) {
-        updates.push({ ns, patch })
-        if (patch.useMaximumContextWindow !== undefined) {
-          storedPreference = patch.useMaximumContextWindow
-        }
-      }
-    }
+    const forms = new ModernSettingsForms({
+      entries: [{
+        ns: 'dsh-workbuddy-connect',
+        schema: WorkBuddy.Config,
+        value: { useMaximumContextWindow: true },
+      }],
+    })
 
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)
-    ctx.provide('settings', new FakeModernSettingsForms() as never)
+    ctx.provide('settings', forms as never)
+    await ctx.plugin(FakeWebServer)
     await ctx.plugin(WorkBuddy, {})
 
     await vi.waitFor(async () => {
       expect((await ctx.llm.listModels('workbuddy-ai')).length).toBeGreaterThan(0)
     })
 
-    // By default, maximum context window (1M) is selected for flash model
-    const flashBefore = await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')
-    expect(flashBefore.context?.contextWindow).toBe(1_000_000)
+    const routes = FakeWebServer.current!.routes
+    expect(routes.has('/plugins/dsh-workbuddy-connect/ai/status')).toBe(true)
+    expect(routes.has('/plugins/dsh-workbuddy-connect/ai/probe')).toBe(true)
+
+    const server = await serve(routes)
+    try {
+      const getStatus = async () => {
+        const res = await fetch(`http://127.0.0.1:${server.port}/plugins/dsh-workbuddy-connect/ai/status`, {
+          headers: { host: `127.0.0.1:${server.port}` },
+        })
+        return res.json() as Promise<Record<string, unknown>>
+      }
+      const postProbe = async (key: string, body: unknown) => {
+        const res = await fetch(`http://127.0.0.1:${server.port}/plugins/dsh-workbuddy-connect/ai/probe`, {
+          method: 'POST',
+          headers: {
+            host: `127.0.0.1:${server.port}`,
+            'content-type': 'application/json',
+            'x-workbuddy-probe-key': key,
+          },
+          body: JSON.stringify(body),
+        })
+        return { status: res.status, body: await res.json() as Record<string, unknown> }
+      }
+
+      // Initial state: 1M context window and status reflects true with probe key
+      const initialStatus = await getStatus()
+      expect(initialStatus['useMaximumContextWindow']).toBe(true)
+      const probeKey = initialStatus['probeKey'] as string
+      expect(probeKey).toBeDefined()
+
+      const flashBefore = await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')
+      expect(flashBefore.context?.contextWindow).toBe(1_000_000)
+
+      // 1. Toggle through the route: disable maximum context window
+      const toggled = await postProbe(probeKey, { action: 'set-maximum-context-window', enabled: false })
+      expect(toggled.status).toBe(200)
+      expect(toggled.body).toEqual({ state: 'updated' })
+
+      // Target entry and saved value are verified
+      expect(forms.writes).toHaveLength(1)
+      expect(forms.writes[0]).toEqual({
+        ns: 'dsh-workbuddy-connect',
+        patch: { useMaximumContextWindow: false },
+        expectedRevision: undefined,
+      })
+      expect(forms.stored('dsh-workbuddy-connect')).toMatchObject({ useMaximumContextWindow: false })
+
+      // Live catalog context window reflects 300K immediately without restart
+      const flashAfter = await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')
+      expect(flashAfter.context?.contextWindow).toBe(300_000)
+
+      const statusAfterToggle = await getStatus()
+      expect(statusAfterToggle['useMaximumContextWindow']).toBe(false)
+
+      // 2. Persistence failure: report failure accurately and keep runtime/persisted state consistent
+      forms.failNext('disk quota exceeded')
+      const failed = await postProbe(probeKey, { action: 'set-maximum-context-window', enabled: true })
+      expect(failed.status).toBe(200)
+      expect(failed.body).toMatchObject({
+        state: 'failed',
+        reason: expect.stringContaining('disk quota exceeded'),
+      })
+
+      // Runtime context window remains 300K (NOT mutated on persistence failure)
+      const flashAfterFailure = await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')
+      expect(flashAfterFailure.context?.contextWindow).toBe(300_000)
+
+      // Status document still accurately reports false
+      const statusAfterFailure = await getStatus()
+      expect(statusAfterFailure['useMaximumContextWindow']).toBe(false)
+
+      // Stored value remains false
+      expect(forms.stored('dsh-workbuddy-connect')).toMatchObject({ useMaximumContextWindow: false })
+    } finally {
+      await server.close()
+    }
+
+    // 3. Restoring the preference after reload
+    await context?.fiber.dispose()
+    context = undefined
+
+    const reloadCtx = new Context()
+    context = reloadCtx
+    await reloadCtx.plugin(LlmRuntime)
+    reloadCtx.provide('settings', forms as never)
+    await reloadCtx.plugin(FakeWebServer)
+    await reloadCtx.plugin(WorkBuddy, {})
+
+    await vi.waitFor(async () => {
+      expect((await reloadCtx.llm.listModels('workbuddy-ai')).length).toBeGreaterThan(0)
+    })
+
+    const reloadServer = await serve(FakeWebServer.current!.routes)
+    try {
+      const reloadStatusRes = await fetch(`http://127.0.0.1:${reloadServer.port}/plugins/dsh-workbuddy-connect/ai/status`, {
+        headers: { host: `127.0.0.1:${reloadServer.port}` },
+      })
+      const reloadStatus = await reloadStatusRes.json() as Record<string, unknown>
+      expect(reloadStatus['useMaximumContextWindow']).toBe(false)
+
+      const flashReload = await reloadCtx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')
+      expect(flashReload.context?.contextWindow).toBe(300_000)
+    } finally {
+      await reloadServer.close()
+    }
+  })
+
+  it('refuses to persist or mutate an unrelated entry that happens to declare a useMaximumContextWindow field', async () => {
+    root = await mkdtemp(join(tmpdir(), 'workbuddy-unrelated-settings-'))
+    const aiFile = join(root, 'ai.info')
+    await writeFile(aiFile, credentialDocument('www.workbuddy.ai'))
+    vi.stubEnv('DSH_HOME', root)
+    vi.stubEnv('WORKBUDDY_AUTH_FILE', join(root, 'absent-cn.info'))
+    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', aiFile)
+    const realFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (String(url).startsWith('http://127.0.0.1')) return realFetch(url, init)
+      throw new Error('offline in tests')
+    }))
+
+    const forms = new ModernSettingsForms({
+      entries: [{
+        ns: 'unrelated-plugin',
+        schema: z.object({ useMaximumContextWindow: z.boolean() }),
+        value: { useMaximumContextWindow: true },
+      }],
+    })
+
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    ctx.provide('settings', forms as never)
+    await ctx.plugin(FakeWebServer)
+    await ctx.plugin(WorkBuddy, {})
+
+    await vi.waitFor(async () => {
+      expect((await ctx.llm.listModels('workbuddy-ai')).length).toBeGreaterThan(0)
+    })
+
+    const server = await serve(FakeWebServer.current!.routes)
+    try {
+      const statusRes = await fetch(`http://127.0.0.1:${server.port}/plugins/dsh-workbuddy-connect/ai/status`, {
+        headers: { host: `127.0.0.1:${server.port}` },
+      })
+      const status = await statusRes.json() as Record<string, unknown>
+      const probeKey = status['probeKey'] as string
+
+      // Attempt to toggle
+      const res = await fetch(`http://127.0.0.1:${server.port}/plugins/dsh-workbuddy-connect/ai/probe`, {
+        method: 'POST',
+        headers: {
+          host: `127.0.0.1:${server.port}`,
+          'content-type': 'application/json',
+          'x-workbuddy-probe-key': probeKey,
+        },
+        body: JSON.stringify({ action: 'set-maximum-context-window', enabled: false }),
+      })
+      const body = await res.json() as Record<string, unknown>
+      expect(body).toMatchObject({
+        state: 'failed',
+        reason: expect.stringContaining('no configurable settings entry'),
+      })
+
+      // The unrelated plugin was never written to
+      expect(forms.writes).toHaveLength(0)
+      expect(forms.stored('unrelated-plugin')).toEqual({ useMaximumContextWindow: true })
+    } finally {
+      await server.close()
+    }
   })
 })
