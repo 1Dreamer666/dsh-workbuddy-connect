@@ -36,7 +36,7 @@ import type { WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-paths.ts'
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
-import { legacySettingsOf } from './legacy-settings.ts'
+import { legacySettingsOf, modernSettingsOf } from './legacy-settings.ts'
 import { CN_VARIANT, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 
 export { WORKBUDDY_PROVIDER, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, createWorkBuddyAdapter, type WorkBuddyAdapter } from './adapter.ts'
@@ -677,6 +677,8 @@ export function apply(ctx: Context, config: Config): void {
    * checkbox that could not be saved.
    */
   let legacySettingsAvailable = false
+  /** Whether modern DSH 0.2.x SettingsForms service is available to persist settings. */
+  let settingsAvailable = false
   /**
    * Point a variant at an account identity, invalidating whatever the previous
    * one left behind.
@@ -783,7 +785,7 @@ export function apply(ctx: Context, config: Config): void {
           // signal, so the getter answers `undefined` — not merely `false` —
           // on a host that cannot persist the preference. See
           // {@link legacySettingsAvailable}.
-          useMaximumContextWindow: () => legacySettingsAvailable
+          useMaximumContextWindow: () => (legacySettingsAvailable || settingsAvailable)
             ? current().useMaximumContextWindow === true
             : undefined,
         },
@@ -903,51 +905,91 @@ export function apply(ctx: Context, config: Config): void {
      * detection exists to survive.
      */
     const legacy = legacySettingsOf(settingsCtx.settings)
-    if (legacy === undefined) {
-      ctx.logger.warn('dsh-workbuddy-connect: host settings service has no installSection API; per-variant settings and the maximum-context preference are unavailable')
+    if (legacy !== undefined) {
+      legacySettingsAvailable = true
+      /** Section sources; each falls back to its own slice when its side unloads. */
+      const sources: { cn: () => Config, ai: () => Config } = {
+        cn: () => config,
+        ai: () => config,
+      }
+      /** Merge both sections into the whole config the rest of the plugin reads. */
+      const merged = (): Config => ({
+        ...sources.cn().authFile === undefined ? {} : { authFile: sources.cn().authFile },
+        ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
+        ...sources.ai().authFileAI === undefined ? {} : { authFileAI: sources.ai().authFileAI },
+        ...sources.ai().useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: sources.ai().useMaximumContextWindow },
+      })
+      const applyMaximumContextWindow = (next: Config): void => {
+        const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
+        if (runtime?.catalog.setUseMaximumContextWindow(next.useMaximumContextWindow === true)) runtime.invalidate()
+      }
+      const repointStores = (): void => {
+        const next = merged()
+        applyMaximumContextWindow(next)
+        for (const runtime of runtimes) {
+          runtime.store.setDesktopPath(configuredAuthFile(next, runtime.variant))
+        }
+      }
+      legacy.installSection(ctx, WORKBUDDY_SETTINGS_NS, CN_SECTION, config, {
+        setSource(source: () => Config) { sources.cn = source; current = merged },
+        onChange: repointStores,
+      })
+      legacy.installSection(ctx, WORKBUDDY_AI_SETTINGS_NS, AI_SECTION, config, {
+        setSource(source: () => Config) { sources.ai = source; current = merged },
+        onChange: repointStores,
+      })
+      // No install-time apply here: the real 0.1.5/0.1.6 `installSection` fires
+      // `onChange()` once synchronously at install (dsh-settings 0.1.6 calls it
+      // unconditionally right after `setSource`), so a restored preference
+      // already reaches `repointStores` through that first notification.
+      // Calling it again would only repeat the work.
+      setMaximumContextWindow = async enabled => {
+        await legacy.update(WORKBUDDY_AI_SETTINGS_NS, { useMaximumContextWindow: enabled })
+        return { state: 'updated' }
+      }
       return
     }
-    legacySettingsAvailable = true
-    /** Section sources; each falls back to its own slice when its side unloads. */
-    const sources: { cn: () => Config, ai: () => Config } = {
-      cn: () => config,
-      ai: () => config,
-    }
-    /** Merge both sections into the whole config the rest of the plugin reads. */
-    const merged = (): Config => ({
-      ...sources.cn().authFile === undefined ? {} : { authFile: sources.cn().authFile },
-      ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
-      ...sources.ai().authFileAI === undefined ? {} : { authFileAI: sources.ai().authFileAI },
-      ...sources.ai().useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: sources.ai().useMaximumContextWindow },
-    })
-    const applyMaximumContextWindow = (next: Config): void => {
-      const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
-      if (runtime?.catalog.setUseMaximumContextWindow(next.useMaximumContextWindow === true)) runtime.invalidate()
-    }
-    const repointStores = (): void => {
-      const next = merged()
-      applyMaximumContextWindow(next)
-      for (const runtime of runtimes) {
-        runtime.store.setDesktopPath(configuredAuthFile(next, runtime.variant))
+
+    const modern = modernSettingsOf(settingsCtx.settings)
+    if (modern !== undefined) {
+      settingsAvailable = true
+      let liveConfig: Config = { ...config }
+      const applyMaximumContextWindow = (enabled: boolean): void => {
+        liveConfig = { ...liveConfig, useMaximumContextWindow: enabled }
+        current = () => liveConfig
+        const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
+        if (runtime?.catalog.setUseMaximumContextWindow(enabled)) runtime.invalidate()
       }
+
+      const findEntryNs = (): string => {
+        try {
+          const descriptors = modern.describe()
+          const match = descriptors.find(desc => {
+            if (desc.ns === 'llm-workbuddy' || desc.ns === 'dsh-workbuddy-connect') return true
+            const schema = desc.schema as { dict?: Record<string, unknown> } | undefined
+            return schema?.dict !== undefined && 'useMaximumContextWindow' in schema.dict
+          })
+          if (match !== undefined) return match.ns
+        } catch {
+          // fall back to default profile entry id
+        }
+        return 'llm-workbuddy'
+      }
+
+      setMaximumContextWindow = async enabled => {
+        applyMaximumContextWindow(enabled)
+        const ns = findEntryNs()
+        try {
+          await modern.update(ns, { useMaximumContextWindow: enabled })
+        } catch (error) {
+          ctx.logger.warn('dsh-workbuddy-connect: modern settings update failed for %s: %s', ns, error)
+        }
+        return { state: 'updated' }
+      }
+      return
     }
-    legacy.installSection(ctx, WORKBUDDY_SETTINGS_NS, CN_SECTION, config, {
-      setSource(source: () => Config) { sources.cn = source; current = merged },
-      onChange: repointStores,
-    })
-    legacy.installSection(ctx, WORKBUDDY_AI_SETTINGS_NS, AI_SECTION, config, {
-      setSource(source: () => Config) { sources.ai = source; current = merged },
-      onChange: repointStores,
-    })
-    // No install-time apply here: the real 0.1.5/0.1.6 `installSection` fires
-    // `onChange()` once synchronously at install (dsh-settings 0.1.6 calls it
-    // unconditionally right after `setSource`), so a restored preference
-    // already reaches `repointStores` through that first notification.
-    // Calling it again would only repeat the work.
-    setMaximumContextWindow = async enabled => {
-      await legacy.update(WORKBUDDY_AI_SETTINGS_NS, { useMaximumContextWindow: enabled })
-      return { state: 'updated' }
-    }
+
+    ctx.logger.warn('dsh-workbuddy-connect: host settings service has no installSection or SettingsForms API; per-variant settings and the maximum-context preference are unavailable')
   })
 
   ctx.effect(() => () => {
