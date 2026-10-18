@@ -856,6 +856,11 @@ interface WorkBuddyAtRestKeyProviderOptions {
   tools?: WorkBuddyDiscoveryTools;
   /** Windows registry discovery subprocess; injectable so tests never spawn. */
   windowsTools?: WorkBuddyWindowsDiscoveryTools;
+  /**
+   * Windows environment variable registry reader, for testing and dynamic
+   * fallback when `process.env` lacks the variable.
+   */
+  readWindowsUserEnv?: (varName: string) => string | undefined;
   /** Platform override for deterministic discovery tests. */
   platform?: NodeJS.Platform;
   /**
@@ -876,7 +881,8 @@ interface WorkBuddyAtRestKeyProviderOptions {
  * In-memory protector-key resolver: one spawn per key id, single-flight, never
  * persisted. The cache is keyed by the id envelopes ask for, so an envelope
  * sealed under a rotated key triggers exactly one fresh resolution.
- */ declare class WorkBuddyAtRestKeyProvider {
+ */
+declare class WorkBuddyAtRestKeyProvider {
   /**
    * The explicit binary, when one was configured. `undefined` here means "the
    * caller did not name one", which is what lets discovery run — an explicit
@@ -889,6 +895,7 @@ interface WorkBuddyAtRestKeyProviderOptions {
   private readonly discovery;
   private readonly tools;
   private readonly windowsTools;
+  private readonly readWindowsUserEnv;
   private readonly platform;
   private readonly discoveryBudgetMs;
   private readonly timeoutMs;

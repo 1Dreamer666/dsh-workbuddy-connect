@@ -9,6 +9,7 @@ import {
   WorkBuddyAtRestKeyProvider,
   WORKBUDDY_ELECTRON_BIN_ENV,
   deriveProtectorKey,
+  readWindowsRegistryUserEnv,
 } from '../src/desktop-credential-protection.ts'
 import type { WorkBuddyWindowsDiscoveryTools } from '../src/desktop-credential-protection.ts'
 import { CN_VARIANT, AI_VARIANT , electronProfileFor} from '../src/variants.ts'
@@ -473,5 +474,57 @@ describe('Windows priority, cache, and explicit paths', () => {
     await rm(candidate)
     await expect(keyProvider.protectorKeyFor(['ffffffffffffffff'])).rejects.toMatchObject({ reasonCode: 'electron-binary-not-found' })
     expect(calls).toHaveLength(6)
+  })
+})
+
+describe('Windows user registry environment fallback', () => {
+  it('reads the explicit variable from readWindowsUserEnv when process.env lacks it', async () => {
+    const candidate = await windowsCandidate('WorkBuddyAI.exe')
+    const calls: string[] = []
+    const tools = fakeWindowsTools(registryOutput([{ name: 'WorkBuddy AI', icon: `"${candidate},0"` }]), { calls })
+    const userEnvReader = vi.fn((varName: string) => varName === 'WORKBUDDY_AI_ELECTRON_BIN' ? candidate : undefined)
+    const provider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(AI_VARIANT),
+      discovery: 'windows-workbuddy',
+      platform: 'win32',
+      defaultElectronPath: undefined,
+      windowsTools: tools,
+      readWindowsUserEnv: userEnvReader,
+      spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    expect(provider.helperPath()).toBeUndefined()
+    await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    expect(provider.helperPath()).toBe(candidate)
+    expect(userEnvReader).toHaveBeenCalledWith('WORKBUDDY_AI_ELECTRON_BIN')
+    expect(calls).toEqual([])
+  })
+
+  it('rejects with electron-path-invalid when readWindowsUserEnv points to a missing binary', async () => {
+    const userEnvReader = vi.fn((varName: string) => varName === 'WORKBUDDY_AI_ELECTRON_BIN' ? join(root, 'non-existent.exe') : undefined)
+    const provider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(AI_VARIANT),
+      discovery: 'windows-workbuddy',
+      platform: 'win32',
+      defaultElectronPath: undefined,
+      readWindowsUserEnv: userEnvReader,
+    })
+    await expect(provider.protectorKeyFor([KEY_ID])).rejects.toMatchObject({ reasonCode: 'electron-path-invalid' })
+  })
+
+  it('prefers process.env over readWindowsUserEnv when process.env is set', async () => {
+    const fromEnv = await windowsCandidate('FromEnv.exe')
+    const fromReg = await windowsCandidate('FromReg.exe')
+    vi.stubEnv(electronProfileFor(AI_VARIANT).envVar, fromEnv)
+    const userEnvReader = vi.fn(() => fromReg)
+    const provider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(AI_VARIANT),
+      discovery: 'windows-workbuddy',
+      platform: 'win32',
+      readWindowsUserEnv: userEnvReader,
+      spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    expect(provider.helperPath()).toBe(fromEnv)
+    await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    expect(userEnvReader).not.toHaveBeenCalled()
   })
 })

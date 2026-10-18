@@ -25,7 +25,7 @@
  * @module dsh-workbuddy-connect/desktop-credential-protection
  */
 
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { accessSync, constants, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
@@ -609,6 +609,11 @@ export interface WorkBuddyAtRestKeyProviderOptions {
   tools?: WorkBuddyDiscoveryTools
   /** Windows registry discovery subprocess; injectable so tests never spawn. */
   windowsTools?: WorkBuddyWindowsDiscoveryTools
+  /**
+   * Windows environment variable registry reader, for testing and dynamic
+   * fallback when `process.env` lacks the variable.
+   */
+  readWindowsUserEnv?: (varName: string) => string | undefined
   /** Platform override for deterministic discovery tests. */
   platform?: NodeJS.Platform
   /**
@@ -1022,10 +1027,59 @@ function parseWindowsUninstallJson(output: string): string | undefined {
 }
 
 /**
+ * Read one user environment variable directly from the Windows registry (`HKCU\Environment`).
+ *
+ * Windows environment changes broadcast `WM_SETTINGCHANGE`, but existing processes
+ * (including a running DSH host) do not automatically reload their inherited `process.env`.
+ * This function queries `HKCU\Environment` (and the system environment as a fallback)
+ * synchronously via `reg.exe` when running on Windows, providing a live fallback when
+ * `process.env` lacks the variable.
+ */
+export function readWindowsRegistryUserEnv(varName: string): string | undefined {
+  if (process.platform !== 'win32') return undefined
+  const systemRoot = process.env.SystemRoot?.trim()
+  const regPath = systemRoot === undefined || systemRoot === ''
+    ? undefined
+    : join(systemRoot, 'System32', 'reg.exe')
+  if (regPath === undefined) return undefined
+  const roots = [
+    'HKCU\\Environment',
+    'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment',
+  ]
+  for (const root of roots) {
+    try {
+      const raw = execFileSync(regPath, ['query', root, '/v', varName], {
+        windowsHide: true,
+        encoding: 'buffer',
+        timeout: 3000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      let text = raw.toString('utf8')
+      if (/[\uFFFD]/u.test(text)) {
+        try {
+          text = new TextDecoder('gbk').decode(raw)
+        } catch {
+          // stay with utf8
+        }
+      }
+      const match = new RegExp(`^\\s*${varName}\\s+REG_[A-Z0-9_]+\\s+(.*)$`, 'imu').exec(text)
+      if (match !== null && match[1] !== undefined) {
+        const val = match[1].trim()
+        if (val !== '') return val
+      }
+    } catch {
+      // Missing key or value: continue
+    }
+  }
+  return undefined
+}
+
+/**
  * In-memory protector-key resolver: one spawn per key id, single-flight, never
  * persisted. The cache is keyed by the id envelopes ask for, so an envelope
  * sealed under a rotated key triggers exactly one fresh resolution.
- */export class WorkBuddyAtRestKeyProvider {
+ */
+export class WorkBuddyAtRestKeyProvider {
   /**
    * The explicit binary, when one was configured. `undefined` here means "the
    * caller did not name one", which is what lets discovery run — an explicit
@@ -1038,6 +1092,7 @@ function parseWindowsUninstallJson(output: string): string | undefined {
   private readonly discovery: WorkBuddyElectronDiscovery
   private readonly tools: WorkBuddyDiscoveryTools
   private readonly windowsTools: WorkBuddyWindowsDiscoveryTools
+  private readonly readWindowsUserEnv: (varName: string) => string | undefined
   private readonly platform: NodeJS.Platform
   private readonly discoveryBudgetMs: number
   private readonly timeoutMs: number
@@ -1055,14 +1110,18 @@ function parseWindowsUninstallJson(output: string): string | undefined {
 
   constructor(options: WorkBuddyAtRestKeyProviderOptions) {
     this.product = options.product
+    this.platform = options.platform ?? process.platform
+    this.discovery = options.discovery ?? 'none'
+    this.readWindowsUserEnv = options.readWindowsUserEnv
+      ?? (options.windowsTools !== undefined || this.discovery !== 'windows-workbuddy'
+        ? () => undefined
+        : (varName: string) => (this.platform === 'win32' && process.platform === 'win32' ? readWindowsRegistryUserEnv(varName) : undefined))
     const fromEnv = process.env[options.product.envVar]?.trim()
     const envPath = fromEnv === undefined || fromEnv === '' ? undefined : fromEnv
     // Explicit sources are authoritative and mutually exclusive with
     // discovery: naming a binary means "use this one", so an unusable one is
     // an error, not an invitation to go looking for another app.
     this.explicitPath = options.electronPath ?? envPath
-    this.discovery = options.discovery ?? 'none'
-    this.platform = options.platform ?? process.platform
     this.defaultPath = this.discovery === 'none'
       ? undefined
       : options.defaultElectronPath === undefined
@@ -1166,6 +1225,21 @@ function parseWindowsUninstallJson(output: string): string | undefined {
         `no ${this.product.productName} Electron binary is configured for this platform;`
         + ` set ${this.product.envVar} to the app's Electron binary`,
       )
+    }
+    // On Windows, if process.env lacked the explicit variable, check the user environment in the registry before full search
+    if (this.platform === 'win32' && !(this.product.envVar in process.env)) {
+      const dynamicEnv = this.readWindowsUserEnv(this.product.envVar)
+      if (dynamicEnv !== undefined && dynamicEnv !== '') {
+        if (!isExecutable(dynamicEnv)) {
+          throw new WorkBuddyElectronPathError(
+            'electron-path-invalid',
+            `the configured ${this.product.productName} Electron binary is not available at ${dynamicEnv};`
+            + ` check ${this.product.envVar} or unset it to let the plugin look for the app itself`,
+          )
+        }
+        this.discoveredPath = dynamicEnv
+        return dynamicEnv
+      }
     }
     // The default path is the ordinary case and costs one stat; discovery is
     // reserved for the installations the default misses.
