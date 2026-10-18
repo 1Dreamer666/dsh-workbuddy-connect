@@ -9,6 +9,7 @@ import {
   WorkBuddyAtRestKeyProvider,
   WORKBUDDY_ELECTRON_BIN_ENV,
   deriveProtectorKey,
+  expandWindowsEnv,
   readWindowsRegistryUserEnv,
 } from '../src/desktop-credential-protection.ts'
 import type { WorkBuddyWindowsDiscoveryTools } from '../src/desktop-credential-protection.ts'
@@ -526,5 +527,121 @@ describe('Windows user registry environment fallback', () => {
     expect(provider.helperPath()).toBe(fromEnv)
     await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
     expect(userEnvReader).not.toHaveBeenCalled()
+  })
+
+  it('skips registry query when the default path is usable', async () => {
+    const defaultPath = await windowsCandidate('DefaultWorkBuddy.exe')
+    const userEnvReader = vi.fn(() => join(root, 'from-registry.exe'))
+    const provider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(CN_VARIANT),
+      discovery: 'windows-workbuddy',
+      platform: 'win32',
+      defaultElectronPath: defaultPath,
+      readWindowsUserEnv: userEnvReader,
+      spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    expect(provider.helperPath()).toBe(defaultPath)
+    expect(userEnvReader).not.toHaveBeenCalled()
+  })
+
+  it('caches the registry user env lookup across resolutions', async () => {
+    const candidate = await windowsCandidate('WorkBuddyAI.exe')
+    const userEnvReader = vi.fn(async () => candidate)
+    const provider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(AI_VARIANT),
+      discovery: 'windows-workbuddy',
+      platform: 'win32',
+      defaultElectronPath: undefined,
+      readWindowsUserEnv: userEnvReader,
+      spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    // Querying again with another key id still uses the cached env
+    await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    expect(userEnvReader).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('readWindowsRegistryUserEnv and expandWindowsEnv', () => {
+  it('expands Windows environment variables case-insensitively', () => {
+    expect(expandWindowsEnv('%USERPROFILE%\\Programs\\app.exe', { USERPROFILE: 'C:\\Users\\Alice' }))
+      .toBe('C:\\Users\\Alice\\Programs\\app.exe')
+    expect(expandWindowsEnv('%localappdata%\\Programs\\app.exe', { LOCALAPPDATA: 'D:\\AppData' }))
+      .toBe('D:\\AppData\\Programs\\app.exe')
+    expect(expandWindowsEnv('%UNKNOWN%\\app.exe', {})).toBe('%UNKNOWN%\\app.exe')
+  })
+
+  it('reads UTF-8 REG_SZ values from HKCU\\Environment', async () => {
+    const output = Buffer.from('\r\nHKEY_CURRENT_USER\\Environment\r\n    TEST_BIN    REG_SZ    C:\\WorkBuddy\\WorkBuddy.exe\r\n', 'utf8')
+    const exec = vi.fn(async () => output)
+    const res = await readWindowsRegistryUserEnv('TEST_BIN', {
+      systemRoot: 'C:\\Windows',
+      exec,
+    })
+    expect(res).toBe('C:\\WorkBuddy\\WorkBuddy.exe')
+    expect(exec).toHaveBeenCalledWith(
+      'C:\\Windows\\System32\\reg.exe',
+      ['query', 'HKCU\\Environment', '/v', 'TEST_BIN'],
+      expect.objectContaining({ timeout: 1500 }),
+    )
+  })
+
+  it('decodes GBK-encoded non-ASCII registry output (Chinese path)', async () => {
+    // GBK-encoded bytes for "C:\Users\张三\WorkBuddy.exe"
+    // "张" in GBK: 0xD5 0xC5; "三" in GBK: 0xC8 0xFD
+    const header = Buffer.from('\r\nHKEY_CURRENT_USER\\Environment\r\n    WORKBUDDY_AI_BIN    REG_SZ    C:\\Users\\', 'ascii')
+    const gbkChars = Buffer.from([0xd5, 0xc5, 0xc8, 0xfd])
+    const tail = Buffer.from('\\WorkBuddy.exe\r\n', 'ascii')
+    const gbkOutput = Buffer.concat([header, gbkChars, tail])
+
+    const res = await readWindowsRegistryUserEnv('WORKBUDDY_AI_BIN', {
+      systemRoot: 'C:\\Windows',
+      exec: async () => gbkOutput,
+    })
+    expect(res).toBe('C:\\Users\\张三\\WorkBuddy.exe')
+  })
+
+  it('expands REG_EXPAND_SZ values using environment variables', async () => {
+    vi.stubEnv('LOCALAPPDATA', 'C:\\Users\\Bob\\AppData\\Local')
+    const output = Buffer.from('\r\nHKEY_CURRENT_USER\\Environment\r\n    EXPAND_BIN    REG_EXPAND_SZ    %LOCALAPPDATA%\\Programs\\WorkBuddy.exe\r\n', 'utf8')
+    const res = await readWindowsRegistryUserEnv('EXPAND_BIN', {
+      systemRoot: 'C:\\Windows',
+      exec: async () => output,
+    })
+    expect(res).toBe('C:\\Users\\Bob\\AppData\\Local\\Programs\\WorkBuddy.exe')
+  })
+
+  it('falls back to HKLM when HKCU does not contain the variable', async () => {
+    const exec = vi.fn(async (_file: string, args: string[]) => {
+      if (args[1] === 'HKCU\\Environment') {
+        throw new Error('ERROR: The system was unable to find the specified registry key or value.')
+      }
+      return Buffer.from('\r\nHKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\r\n    SYSTEM_BIN    REG_SZ    C:\\System\\WorkBuddy.exe\r\n')
+    })
+    const res = await readWindowsRegistryUserEnv('SYSTEM_BIN', {
+      systemRoot: 'C:\\Windows',
+      exec,
+    })
+    expect(res).toBe('C:\\System\\WorkBuddy.exe')
+    expect(exec).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns undefined when reg.exe query fails or times out', async () => {
+    const res = await readWindowsRegistryUserEnv('MISSING_BIN', {
+      systemRoot: 'C:\\Windows',
+      exec: async () => { throw new Error('reg command timed out') },
+    })
+    expect(res).toBeUndefined()
+  })
+
+  it('returns undefined when SystemRoot is missing', async () => {
+    const exec = vi.fn()
+    const res = await readWindowsRegistryUserEnv('ANY_BIN', {
+      systemRoot: '',
+      exec,
+    })
+    expect(res).toBeUndefined()
+    expect(exec).not.toHaveBeenCalled()
   })
 })
