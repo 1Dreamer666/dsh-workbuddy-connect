@@ -28,7 +28,7 @@
 import { execFile } from 'node:child_process'
 import { accessSync, constants, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, win32 } from 'node:path'
 import type { WorkBuddySignedOutReasonCode } from './status-paths.ts'
 import { electronProfileFor } from './variants.ts'
 import type { WorkBuddyElectronProduct, WorkBuddyVariant } from './variants.ts'
@@ -60,6 +60,11 @@ export function defaultWorkBuddyElectronPath(
   const localAppData = process.env.LOCALAPPDATA?.trim()
   return localAppData === undefined || localAppData === ''
     ? undefined
+    // Host `join`, deliberately: this value is a *filesystem* path that the
+    // caller stats immediately, and the function only answers on a real
+    // `win32` host, where host `join` already emits the Windows separator.
+    // Windows-shaped strings that are never touched by `fs` (the registry
+    // tool paths below) use `win32.join` instead.
     : join(localAppData, ...product.windows.defaultPathSegments)
 }
 
@@ -812,9 +817,12 @@ export function workBuddyDiscoveryTools(bundleId: string): WorkBuddyDiscoveryToo
  */
 export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools {
   const systemRoot = process.env.SystemRoot?.trim()
+  // Both tool paths are Windows paths by construction: win32.join keeps them
+  // one shape whether this module is loaded on Windows or (for the offline
+  // regression suite) on a POSIX host.
   const regPath = systemRoot === undefined || systemRoot === ''
     ? undefined
-    : join(systemRoot, 'System32', 'reg.exe')
+    : win32.join(systemRoot, 'System32', 'reg.exe')
   /**
    * The fallback interpreter. Resolved by absolute path from SystemRoot, like
    * `reg.exe`: never through PATH, which a user can change.
@@ -825,7 +833,7 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
    */
   const powershellPath = systemRoot === undefined || systemRoot === ''
     ? undefined
-    : join(systemRoot, WINDOWS_REGISTRY_RELATIVE_POWERSHELL)
+    : win32.join(systemRoot, WINDOWS_REGISTRY_RELATIVE_POWERSHELL)
   const runTool = (root: string, signal: AbortSignal): Promise<Buffer> => new Promise<Buffer>((resolve, reject) => {
     if (regPath === undefined) {
       reject(new DiscoveryIncompleteError('SystemRoot is not configured'))
@@ -1059,9 +1067,12 @@ export async function readWindowsRegistryUserEnv(
 ): Promise<string | undefined> {
   if (process.platform !== 'win32' && options.exec === undefined) return undefined
   const systemRoot = options.systemRoot ?? process.env.SystemRoot?.trim()
+  // win32.join, not the host's join: this path is a Windows path even when the
+  // suite runs on macOS or Linux (the reader is reachable there through the
+  // injected `exec` seam), and POSIX join would emit `C:\Windows/System32/reg.exe`.
   const regPath = systemRoot === undefined || systemRoot === ''
     ? undefined
-    : join(systemRoot, 'System32', 'reg.exe')
+    : win32.join(systemRoot, 'System32', 'reg.exe')
   if (regPath === undefined) return undefined
 
   const timeoutMs = options.timeoutMs ?? 1500
@@ -1126,11 +1137,6 @@ export class WorkBuddyAtRestKeyProvider {
   private readonly tools: WorkBuddyDiscoveryTools
   private readonly windowsTools: WorkBuddyWindowsDiscoveryTools
   private readonly readWindowsUserEnv: (varName: string) => Promise<string | undefined> | string | undefined
-  /**
-   * Cached Windows user environment query result, so we only read the registry
-   * at most once per key provider instance.
-   */
-  private userEnvCache?: { value: string | undefined }
   private readonly platform: NodeJS.Platform
   private readonly discoveryBudgetMs: number
   private readonly timeoutMs: number
@@ -1143,6 +1149,12 @@ export class WorkBuddyAtRestKeyProvider {
    * the app without restarting DSH.
    */
   private discoveredPath: string | undefined
+  /**
+   * The explicit binary this product's variable names in the Windows user
+   * environment, cached only when the environment actually named one. A miss
+   * stays uncached — see {@link windowsUserEnvPath}.
+   */
+  private userEnvCache: string | undefined
   private cache: ResolvedKey | undefined
   private inflight: Promise<ResolvedKey> | undefined
 
@@ -1238,6 +1250,45 @@ export class WorkBuddyAtRestKeyProvider {
   }
 
   /**
+   * The explicit binary named in the Windows *user* environment, when
+   * `process.env` does not carry it.
+   *
+   * A hit is cached: it is a user-level preference that only changes when
+   * someone edits it, and caching it keeps a warm path from re-spawning
+   * `reg.exe` on every poll. A miss is deliberately **not** cached. The whole
+   * point of this branch is the window in which the variable is missing from
+   * the running host's snapshot — the user reads the card's diagnostic, adds
+   * the variable, and retries without restarting DSH. Remembering "it was not
+   * there" would pin the failing answer for the life of the process, which is
+   * exactly the case this fallback exists to fix. The read is bounded
+   * (1500ms, async) and only runs while the variable is absent, so a retry
+   * costs one short subprocess per attempt and stops as soon as it succeeds.
+   */
+  private async windowsUserEnvPath(): Promise<string | undefined> {
+    const cached = this.userEnvCache
+    if (cached !== undefined) {
+      if (isExecutable(cached)) return cached
+      // The remembered value no longer names a binary — the app was moved or
+      // uninstalled, or the variable was edited to something else. Forget it
+      // and read the current value instead of reporting the old one.
+      this.userEnvCache = undefined
+    }
+    let raw: string | undefined
+    try {
+      raw = await this.readWindowsUserEnv(this.product.envVar)
+    } catch {
+      // A reader that fails is "we could not look", not "there is nothing
+      // there": the caller falls through to discovery, exactly as it would
+      // for an absent variable, and the next attempt may look again.
+      return undefined
+    }
+    const trimmed = raw?.trim()
+    if (trimmed === undefined || trimmed === '') return undefined
+    this.userEnvCache = trimmed
+    return trimmed
+  }
+
+  /**
    * The binary to spawn, or a diagnosable error saying why there is none.
    *
    * Order is the contract: an explicit path is used as-is and never falls back;
@@ -1264,36 +1315,38 @@ export class WorkBuddyAtRestKeyProvider {
         + ` set ${this.product.envVar} to the app's Electron binary`,
       )
     }
-    // Priority order:
-    // 1. The default path is the ordinary case and costs one stat; discovery is
-    // reserved for the installations the default misses.
+    // Priority order, and the support boundary it encodes:
+    //
+    // 1. The default path is the ordinary case and costs one stat; it is the
+    //    app's own standard install, so it outranks anything this plugin
+    //    inferred for itself.
     if (this.defaultPath !== undefined && isExecutable(this.defaultPath)) return this.defaultPath
-    // 2. A previously discovered path is re-checked rather than trusted: the app
+    // 2. On Windows, the variable the user set for this product. `process.env`
+    //    already supplied it when the host inherited it (the explicit branch
+    //    above); this reads the *user* environment, which a running host's
+    //    snapshot does not pick up. It deliberately outranks the path a
+    //    previous discovery settled on: an explicit choice must not be
+    //    silently overruled by an earlier guess, or a user who moves the app
+    //    and repoints the variable would keep hitting the old install.
+    if (this.platform === 'win32' && !(this.product.envVar in process.env)) {
+      const configured = await this.windowsUserEnvPath()
+      if (configured !== undefined) {
+        if (!isExecutable(configured)) {
+          throw new WorkBuddyElectronPathError(
+            'electron-path-invalid',
+            `the configured ${this.product.productName} Electron binary is not available at ${configured};`
+            + ` check ${this.product.envVar} or unset it to let the plugin look for the app itself`,
+          )
+        }
+        this.discoveredPath = configured
+        return configured
+      }
+    }
+    // 3. A previously discovered path is re-checked rather than trusted: the app
     // may have been moved or removed since, and a stale path must not win.
     if (this.discoveredPath !== undefined) {
       if (isExecutable(this.discoveredPath)) return this.discoveredPath
       this.discoveredPath = undefined
-    }
-    // 3. Fallback: on Windows, if process.env lacked the explicit variable,
-    // check the user environment in the registry asynchronously with limited budget
-    // and caching before falling back to full registry discovery.
-    if (this.platform === 'win32' && !(this.product.envVar in process.env)) {
-      if (this.userEnvCache === undefined) {
-        const raw = await this.readWindowsUserEnv(this.product.envVar)
-        this.userEnvCache = { value: raw?.trim() }
-      }
-      const dynamicEnv = this.userEnvCache.value
-      if (dynamicEnv !== undefined && dynamicEnv !== '') {
-        if (!isExecutable(dynamicEnv)) {
-          throw new WorkBuddyElectronPathError(
-            'electron-path-invalid',
-            `the configured ${this.product.productName} Electron binary is not available at ${dynamicEnv};`
-            + ` check ${this.product.envVar} or unset it to let the plugin look for the app itself`,
-          )
-        }
-        this.discoveredPath = dynamicEnv
-        return dynamicEnv
-      }
     }
     // 4. Candidate discovery across registry uninstall roots.
     const found = this.discovery === 'macos-workbuddy'
