@@ -36,7 +36,7 @@ import type { WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-paths.ts'
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
-import { legacySettingsOf, modernSettingsOf } from './legacy-settings.ts'
+import { legacySettingsOf, modernSettingsOf, resolveModernSettingsEntryId } from './legacy-settings.ts'
 import { CN_VARIANT, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 
 export { WORKBUDDY_PROVIDER, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, createWorkBuddyAdapter, type WorkBuddyAdapter } from './adapter.ts'
@@ -246,15 +246,39 @@ const AUTH_FILE_AI_FIELD = z.string().description('WorkBuddy AI desktop auth fil
 /** Probe authorization (shared by the plugin schema and the CN section). */
 const PROBE_CONSENT_FIELD = z.boolean().default(false)
   .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)')
-const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true)
+// `.volatile()` is what makes this field live-editable through the DSH 0.2.x
+// SettingsForms facade: `describe()` only serves entries with at least one
+// volatile field, and `update()` rejects writes to anything else. The cost is
+// that a resolved Config hands the field back wrapped in a cosmokit volatile
+// container (`{ get() }`), so every read goes through
+// {@link plainConfigBoolean} below.
+const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true).volatile()
   .description('Use the largest context window declared by WorkBuddy AI when alternatives are available (on by default)')
 
-export const Config: z<Config> = z.object({
+// Same `.volatile()` typing artifact as {@link AI_SECTION}: the static
+// default type of the marked field is `Volatile<boolean>`, while consumers
+// see plain booleans — this plugin unwraps every resolved value through
+// {@link plainConfigBoolean}.
+export const Config = z.object({
   authFile: AUTH_FILE_FIELD,
   authFileAI: AUTH_FILE_AI_FIELD,
   probeConsent: PROBE_CONSENT_FIELD,
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
-})
+}) as unknown as z<Config>
+
+/**
+ * Read the context-window preference off a resolved Config. Fields marked
+ * `.volatile()` materialize as cosmokit volatile containers (`{ get() }`) so
+ * the host can live-update them without remounting the plugin; plain hosts
+ * and values set through this plugin are plain booleans. Both spellings
+ * answer here.
+ */
+function plainConfigBoolean(value: unknown): boolean | undefined {
+  if (value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function') {
+    return plainConfigBoolean((value as { get(): unknown }).get())
+  }
+  return value === undefined ? undefined : value === true
+}
 
 /**
  * The CN side's settings section: only the fields that side edits.
@@ -271,10 +295,14 @@ const CN_SECTION: z<Config> = z.object({
 })
 
 /** The international card's settings section and its context-window preference. */
-const AI_SECTION: z<Config> = z.object({
+// The `.volatile()` marking makes the field's static default type
+// `Volatile<boolean>`, which no longer matches `z<Config>` — an artifact of
+// schemastery's typing only: at runtime the section carries plain booleans
+// (this plugin unwraps resolved values through `plainConfigBoolean`).
+const AI_SECTION = z.object({
   authFileAI: AUTH_FILE_AI_FIELD,
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
-})
+}) as unknown as z<Config>
 
 /** One variant's live runtime, assembled by {@link createVariantRuntime}. */
 interface VariantRuntime {
@@ -402,7 +430,7 @@ function createVariantRuntime(
   })
   const fallback = fallbackFor(variant)
   const catalog = new WorkBuddyCatalog(fallback)
-  if (variant.id !== CN_VARIANT.id) catalog.setUseMaximumContextWindow(config.useMaximumContextWindow === true)
+  if (variant.id !== CN_VARIANT.id) catalog.setUseMaximumContextWindow(plainConfigBoolean(config.useMaximumContextWindow) === true)
   // Start hidden: a variant must serve no models until an account has actually
   // been adopted, so a signed-out variant is empty rather than showing a roster
   // whose models could only fail. `adoptIdentity` is what reveals it, and it
@@ -786,7 +814,7 @@ export function apply(ctx: Context, config: Config): void {
           // on a host that cannot persist the preference. See
           // {@link legacySettingsAvailable}.
           useMaximumContextWindow: () => (legacySettingsAvailable || settingsAvailable)
-            ? current().useMaximumContextWindow === true
+            ? plainConfigBoolean(current().useMaximumContextWindow) === true
             : undefined,
         },
       })
@@ -913,12 +941,18 @@ export function apply(ctx: Context, config: Config): void {
         ai: () => config,
       }
       /** Merge both sections into the whole config the rest of the plugin reads. */
-      const merged = (): Config => ({
-        ...sources.cn().authFile === undefined ? {} : { authFile: sources.cn().authFile },
-        ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
-        ...sources.ai().authFileAI === undefined ? {} : { authFileAI: sources.ai().authFileAI },
-        ...sources.ai().useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: sources.ai().useMaximumContextWindow },
-      })
+      const merged = (): Config => {
+        // The AI preference may arrive as a volatile container (see
+        // {@link plainConfigBoolean}); the merged config always carries a
+        // plain boolean so downstream comparisons keep working.
+        const aiMaximum = plainConfigBoolean(sources.ai().useMaximumContextWindow)
+        return {
+          ...sources.cn().authFile === undefined ? {} : { authFile: sources.cn().authFile },
+          ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
+          ...sources.ai().authFileAI === undefined ? {} : { authFileAI: sources.ai().authFileAI },
+          ...aiMaximum === undefined ? {} : { useMaximumContextWindow: aiMaximum },
+        }
+      }
       const applyMaximumContextWindow = (next: Config): void => {
         const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
         if (runtime?.catalog.setUseMaximumContextWindow(next.useMaximumContextWindow === true)) runtime.invalidate()
@@ -952,7 +986,6 @@ export function apply(ctx: Context, config: Config): void {
 
     const modern = modernSettingsOf(settingsCtx.settings)
     if (modern !== undefined) {
-      settingsAvailable = true
       /**
        * The live preference as the host's own Config reports it.
        *
@@ -963,7 +996,7 @@ export function apply(ctx: Context, config: Config): void {
        * applies — the preference field defaults to `true` and the composition
        * handed this plugin its resolved `config`.
        */
-      let liveConfig: Config = { ...config }
+      let liveConfig: Config = { ...config, useMaximumContextWindow: plainConfigBoolean(config.useMaximumContextWindow) ?? true }
       /** Whether {@link liveConfig} came from a settings descriptor (see below). */
       let liveConfigBound = false
       /**
@@ -971,43 +1004,28 @@ export function apply(ctx: Context, config: Config): void {
        *
        * The namespace on a 0.2.x host is the *profile entry id* — not the
        * `SettingsNamespace` the 0.1.x sections were installed under — so it is
-       * whatever the user named this plugin in `cordis.yml`. Matching on the
-       * schema alone would find any neighbouring entry that happens to declare
-       * a `useMaximumContextWindow` field and write the preference into a
-       * plugin that does not own it, so the field is only ever a *tie-break*
-       * among entries that already proved they are this plugin.
+       * whatever the user named this plugin in the profile composition.
        *
-       * Identity comes from the same facts the loader itself keys an entry by:
-       * the schema handed out is this module's {@link Config} (`describe()`
-       * returns the plugin's live `Config` as `schema`), and the entry's fiber
-       * is the plugin instance that injected `settings` — the context this
-       * inject body runs under. Anything unmatched answers `undefined`; there
-       * is no guessed fallback, because a wrong guess silently writes another
+       * Identity cannot come from the descriptors themselves: `describe()`
+       * hands out *serialized* forms (`volatileForm(schema).toJSON()`), never
+       * the live Config object, and its rows carry no fiber — so
+       * `desc.schema === Config` and fiber comparisons are always false
+       * against the real service. The loader instead keys entries by id and
+       * attaches them to the fibers it runs (`ctx.fiber.entry.options.id`, unlike the tree-qualified `entry.id`), which is
+       * what {@link resolveModernSettingsEntryId} reads; the package-name
+       * literal stays as the only fallback (entry ids are unique per
+       * composition, so it can only name this plugin). Anything unmatched
+       * answers `undefined` — a wrong guess would silently write another
        * plugin's configuration.
        */
       const settingsEntryId = (): string | undefined => {
         try {
-          const descriptors = modern.describe()
-          // 1. Direct schema identity (exact match with exported Config)
-          const bySchema = descriptors.filter(desc => desc.schema === Config)
-          if (bySchema.length > 0) return bySchema[0]?.ns
-
-          // 2. Exact package entry id ('dsh-workbuddy-connect')
-          const byPackageName = descriptors.find(desc => desc.ns === 'dsh-workbuddy-connect')
-          if (byPackageName !== undefined) return byPackageName.ns
-
-          // 3. A wrapper schema defeats the identity check above; the producing
-          // fiber does not. Never the field name alone.
-          const fiber = (ctx as unknown as { reflect?: { _getImpl?: (name: string) => { fiber?: unknown } | undefined } })
-            .reflect?._getImpl?.('settings')?.fiber
-          if (fiber !== undefined) {
-            const match = descriptors.find(desc => (desc as { fiber?: unknown }).fiber === fiber)
-            if (match !== undefined) return match.ns
-          }
+          const entry = (ctx.fiber as unknown as { entry?: { id?: string; options?: { id?: string } } } | undefined)?.entry
+          return resolveModernSettingsEntryId(modern.describe(), entry?.options?.id ?? entry?.id)
         } catch (error: unknown) {
           ctx.logger.warn('dsh-workbuddy-connect: reading this plugin\'s settings entry failed: %s', error)
+          return undefined
         }
-        return undefined
       }
 
       /**
@@ -1021,7 +1039,10 @@ export function apply(ctx: Context, config: Config): void {
       const applyModernConfig = (): void => {
         if (!liveConfigBound) return
         const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
-        if (runtime?.catalog.setUseMaximumContextWindow(liveConfig.useMaximumContextWindow === true)) runtime.invalidate()
+        // `plainConfigBoolean` guards against a wrapper sneaking into
+        // liveConfig from a future code path — a raw `=== true` on a volatile
+        // container reads false and would silently shrink the window.
+        if (runtime?.catalog.setUseMaximumContextWindow(plainConfigBoolean(liveConfig.useMaximumContextWindow) === true)) runtime.invalidate()
       }
 
       setMaximumContextWindow = async enabled => {
@@ -1054,37 +1075,52 @@ export function apply(ctx: Context, config: Config): void {
         return { state: 'updated' }
       }
 
-      // Bind the stored preference — the constructor's `config` is the
-      // resolved field set, and a missing descriptor simply leaves the default
-      // in effect.
-      try {
-        const ns = settingsEntryId()
-        const entry = ns === undefined ? undefined : modern.describe().find(desc => desc.ns === ns)
-        const stored = (entry?.value as { useMaximumContextWindow?: unknown } | undefined)?.useMaximumContextWindow
-        liveConfig = { ...config, ...stored === undefined ? {} : { useMaximumContextWindow: stored === true } }
-        liveConfigBound = true
-        current = () => liveConfig
-        applyModernConfig()
-      } catch (error: unknown) {
-        ctx.logger.warn('dsh-workbuddy-connect: reading the stored context-window preference failed: %s', error)
+      // SettingsForms may publish the entry several seconds after injection.
+      // Read only, with a finite budget (15.75s); events can recover later.
+      let retry: ReturnType<typeof setTimeout> | undefined
+      let retryIndex = 0
+      let bindingStopped = false
+      const retryDelays = [250, 500, 1000, 2000, 4000, 8000]
+      const clearRetry = (): void => {
+        clearTimeout(retry)
+        retry = undefined
       }
-      // Pages and CLI clients that already read the status document re-render
-      // from it; the settings service announces every accepted write, so the
-      // card reflects edits made elsewhere (a native config editor, the CLI)
-      // without polling.
-      ctx.effect(() => ctx.on('settings/document-updated', (ns: string) => {
+      const bindModernConfig = (): void => {
+        if (bindingStopped) return
         try {
-          const own = settingsEntryId()
-          if (own === undefined || (ns !== undefined && ns !== own)) return
-          const entry = modern.describe().find(desc => desc.ns === own)
-          const stored = (entry?.value as { useMaximumContextWindow?: unknown } | undefined)?.useMaximumContextWindow
-          if (stored === undefined) return
-          liveConfig = { ...liveConfig, useMaximumContextWindow: stored === true }
-          applyModernConfig()
-        } catch {
-          // A host that rejects the read keeps the value already in effect.
+          const ns = settingsEntryId()
+          const entry = ns === undefined ? undefined : modern.describe().find(desc => desc.ns === ns)
+          const schema = entry?.schema === undefined ? undefined : new z(entry.schema as never)
+          settingsAvailable = schema?.dict?.useMaximumContextWindow?.type === 'boolean'
+          if (settingsAvailable) {
+            const stored = (entry?.value as { useMaximumContextWindow?: unknown } | undefined)?.useMaximumContextWindow
+            liveConfig = { ...liveConfig, useMaximumContextWindow: plainConfigBoolean(stored) ?? plainConfigBoolean(liveConfig.useMaximumContextWindow) ?? true }
+            liveConfigBound = true
+            current = () => liveConfig
+            applyModernConfig()
+            clearRetry()
+            return
+          }
+        } catch (error: unknown) {
+          settingsAvailable = false
+          ctx.logger.warn('dsh-workbuddy-connect: reading the stored context-window preference failed: %s', error)
         }
+        if (retry === undefined && retryIndex < retryDelays.length) {
+          retry = setTimeout(() => {
+            retry = undefined
+            bindModernConfig()
+          }, retryDelays[retryIndex++])
+        }
+      }
+      settingsCtx.effect(() => () => {
+        bindingStopped = true
+        clearRetry()
+        settingsAvailable = false
+      })
+      settingsCtx.effect(() => ctx.on('settings/document-updated', () => {
+        bindModernConfig()
       }) as () => void)
+      bindModernConfig()
       return
     }
 
