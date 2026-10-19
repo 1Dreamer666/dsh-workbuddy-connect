@@ -14,6 +14,7 @@ import {
 } from '../src/desktop-credential-protection.ts'
 import type { WorkBuddyWindowsDiscoveryTools } from '../src/desktop-credential-protection.ts'
 import { CN_VARIANT, AI_VARIANT , electronProfileFor} from '../src/variants.ts'
+import { isolateProductEnv } from './helpers/product-env.ts'
 
 const SECRET = Buffer.alloc(32, 9).toString('base64')
 const PAYLOAD_TEXT = JSON.stringify({ version: 1, atRestSecretKey: SECRET })
@@ -21,6 +22,13 @@ const KEY = deriveProtectorKey(SECRET)
 const KEY_ID = createHash('sha256').update(KEY).digest('hex').slice(0, 16)
 
 let root: string
+
+/**
+ * A real machine may carry these variables (a developer box certainly can), and
+ * the provider branches on *presence* (`varName in process.env`), so they must
+ * be absent — not blank — for these tests to exercise the fallback.
+ */
+isolateProductEnv()
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'wb-windows-electron-discovery-'))
@@ -557,9 +565,147 @@ describe('Windows user registry environment fallback', () => {
       spawnHelper: async () => PAYLOAD_TEXT,
     })
     await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
-    // Querying again with another key id still uses the cached env
-    await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    // A second, *different* key id forces a full re-resolution: the key cache
+    // cannot answer it, so the only way this call can avoid a second registry
+    // read is the user-env cache itself. Repeating the same key id would have
+    // returned from the key cache and proved nothing about this cache.
+    await expect(provider.protectorKeyFor(['ffffffffffffffff']))
+      .rejects.toMatchObject({ reasonCode: 'encrypted-credential-unreadable' })
     expect(userEnvReader).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-reads the user env after a miss, so setting the variable is picked up without a restart', async () => {
+    // The case the whole fallback exists for: the first attempt finds nothing
+    // (the user has not configured the variable yet), the card shows the
+    // diagnostic, the user adds it in System Properties, and the retry must
+    // succeed. A cached `undefined` would pin the failure until DSH restarts.
+    const candidate = await windowsCandidate('WorkBuddyAI.exe')
+    let configured: string | undefined
+    const userEnvReader = vi.fn(() => configured)
+    const provider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(AI_VARIANT),
+      discovery: 'windows-workbuddy',
+      platform: 'win32',
+      defaultElectronPath: undefined,
+      // No uninstall record either, so the first attempt has nothing to find.
+      windowsTools: fakeWindowsTools(''),
+      readWindowsUserEnv: userEnvReader,
+      spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    // First attempt: the variable does not exist yet, and the uninstall sweep
+    // finds nothing either — a diagnosable failure, not a crash.
+    await expect(provider.protectorKeyFor([KEY_ID])).rejects.toMatchObject({ reasonCode: 'electron-binary-not-found' })
+    expect(userEnvReader).toHaveBeenCalledTimes(1)
+    expect(provider.helperPath()).toBeUndefined()
+
+    // The user configures the variable; the retry must consult the registry
+    // again and use the new value instead of the remembered miss.
+    configured = candidate
+    await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    expect(userEnvReader).toHaveBeenCalledTimes(2)
+    expect(provider.helperPath()).toBe(candidate)
+  })
+
+  it('keeps consulting the registry while the variable stays unset', async () => {
+    const userEnvReader = vi.fn(() => undefined)
+    const provider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(AI_VARIANT),
+      discovery: 'windows-workbuddy',
+      platform: 'win32',
+      defaultElectronPath: undefined,
+      windowsTools: fakeWindowsTools(''),
+      readWindowsUserEnv: userEnvReader,
+    })
+    await expect(provider.protectorKeyFor([KEY_ID])).rejects.toMatchObject({ reasonCode: 'electron-binary-not-found' })
+    await expect(provider.protectorKeyFor([KEY_ID])).rejects.toMatchObject({ reasonCode: 'electron-binary-not-found' })
+    expect(userEnvReader).toHaveBeenCalledTimes(2)
+  })
+
+  it('treats a blank user env value as unset rather than as an empty path', async () => {
+    const candidate = await windowsCandidate('WorkBuddyAI.exe')
+    const userEnvReader = vi.fn(() => '   ')
+    const provider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(AI_VARIANT),
+      discovery: 'windows-workbuddy',
+      platform: 'win32',
+      defaultElectronPath: undefined,
+      windowsTools: fakeWindowsTools(registryOutput([{ name: 'WorkBuddy AI', icon: `"${candidate},0"` }])),
+      readWindowsUserEnv: userEnvReader,
+      spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    // Blank means "not configured", so the uninstall sweep still runs and wins
+    // — it must not be reported as an invalid configured path.
+    await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    expect(provider.helperPath()).toBe(candidate)
+  })
+
+  it('falls through to discovery when the registry reader itself fails', async () => {
+    const candidate = await windowsCandidate('WorkBuddyAI.exe')
+    const userEnvReader = vi.fn(() => { throw new Error('reg.exe is unavailable') })
+    const provider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(AI_VARIANT),
+      discovery: 'windows-workbuddy',
+      platform: 'win32',
+      defaultElectronPath: undefined,
+      windowsTools: fakeWindowsTools(registryOutput([{ name: 'WorkBuddy AI', icon: `"${candidate},0"` }])),
+      readWindowsUserEnv: userEnvReader,
+      spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    expect(provider.helperPath()).toBe(candidate)
+  })
+
+  it('lets the user env override a path discovery settled on earlier', async () => {
+    // The support boundary the review asked about: an explicit choice must
+    // not be silently outranked by this plugin's own earlier guess.
+    const discovered = await windowsCandidate('WorkBuddyAI.exe')
+    const explicit = await windowsCandidate('WorkBuddyAIMoved.exe', { installRoot: join(root, 'Moved') })
+    let configured: string | undefined
+    const userEnvReader = vi.fn(() => configured)
+    const provider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(AI_VARIANT),
+      discovery: 'windows-workbuddy',
+      platform: 'win32',
+      defaultElectronPath: undefined,
+      windowsTools: fakeWindowsTools(registryOutput([{ name: 'WorkBuddy AI', icon: `"${discovered},0"` }])),
+      readWindowsUserEnv: userEnvReader,
+      spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    // Nothing configured yet: the uninstall sweep settles on the discovered app.
+    await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    expect(provider.helperPath()).toBe(discovered)
+
+    // The user then names a different binary; the next resolution must honour
+    // it rather than keep serving the remembered discovery result.
+    configured = explicit
+    await expect(provider.protectorKeyFor(['ffffffffffffffff']))
+      .rejects.toMatchObject({ reasonCode: 'encrypted-credential-unreadable' })
+    expect(provider.helperPath()).toBe(explicit)
+  })
+
+  it('forgets a cached user env value whose binary has since disappeared', async () => {
+    const candidate = await windowsCandidate('WorkBuddyAI.exe')
+    const replacement = await windowsCandidate('WorkBuddyAI.exe', { installRoot: join(root, 'Replacement') })
+    let current = candidate
+    const userEnvReader = vi.fn(() => current)
+    const provider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(AI_VARIANT),
+      discovery: 'windows-workbuddy',
+      platform: 'win32',
+      defaultElectronPath: undefined,
+      windowsTools: fakeWindowsTools(''),
+      readWindowsUserEnv: userEnvReader,
+      spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    await rm(candidate)
+    current = replacement
+    // The stale cached value is re-checked before it is believed: it is gone,
+    // so the reader runs again and the new value is adopted.
+    await expect(provider.protectorKeyFor(['ffffffffffffffff']))
+      .rejects.toMatchObject({ reasonCode: 'encrypted-credential-unreadable' })
+    expect(userEnvReader).toHaveBeenCalledTimes(2)
+    expect(provider.helperPath()).toBe(replacement)
   })
 })
 
@@ -581,6 +727,8 @@ describe('readWindowsRegistryUserEnv and expandWindowsEnv', () => {
     })
     expect(res).toBe('C:\\WorkBuddy\\WorkBuddy.exe')
     expect(exec).toHaveBeenCalledWith(
+      // Backslashes on every host: this is a Windows path handed to execFile,
+      // not a filesystem path the test host would resolve.
       'C:\\Windows\\System32\\reg.exe',
       ['query', 'HKCU\\Environment', '/v', 'TEST_BIN'],
       expect.objectContaining({ timeout: 1500 }),

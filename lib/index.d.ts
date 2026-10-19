@@ -896,11 +896,6 @@ declare class WorkBuddyAtRestKeyProvider {
   private readonly tools;
   private readonly windowsTools;
   private readonly readWindowsUserEnv;
-  /**
-   * Cached Windows user environment query result, so we only read the registry
-   * at most once per key provider instance.
-   */
-  private userEnvCache?;
   private readonly platform;
   private readonly discoveryBudgetMs;
   private readonly timeoutMs;
@@ -913,6 +908,12 @@ declare class WorkBuddyAtRestKeyProvider {
    * the app without restarting DSH.
    */
   private discoveredPath;
+  /**
+   * The explicit binary this product's variable names in the Windows user
+   * environment, cached only when the environment actually named one. A miss
+   * stays uncached — see {@link windowsUserEnvPath}.
+   */
+  private userEnvCache;
   private cache;
   private inflight;
   constructor(options: WorkBuddyAtRestKeyProviderOptions);
@@ -935,6 +936,22 @@ declare class WorkBuddyAtRestKeyProvider {
    */
   protectorKeyFor(requested: readonly string[]): Promise<Buffer>;
   private ingest;
+  /**
+   * The explicit binary named in the Windows *user* environment, when
+   * `process.env` does not carry it.
+   *
+   * A hit is cached: it is a user-level preference that only changes when
+   * someone edits it, and caching it keeps a warm path from re-spawning
+   * `reg.exe` on every poll. A miss is deliberately **not** cached. The whole
+   * point of this branch is the window in which the variable is missing from
+   * the running host's snapshot — the user reads the card's diagnostic, adds
+   * the variable, and retries without restarting DSH. Remembering "it was not
+   * there" would pin the failing answer for the life of the process, which is
+   * exactly the case this fallback exists to fix. The read is bounded
+   * (1500ms, async) and only runs while the variable is absent, so a retry
+   * costs one short subprocess per attempt and stops as soon as it succeeds.
+   */
+  private windowsUserEnvPath;
   /**
    * The binary to spawn, or a diagnosable error saying why there is none.
    *
