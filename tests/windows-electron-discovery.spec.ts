@@ -26,7 +26,7 @@ let root: string
 /**
  * A real machine may carry these variables (a developer box certainly can), and
  * the provider branches on *presence* (`varName in process.env`), so they must
- * be absent — not blank — for these tests to exercise the fallback.
+ * be absent or blank for these tests to exercise the fallback.
  */
 isolateProductEnv()
 
@@ -487,6 +487,32 @@ describe('Windows priority, cache, and explicit paths', () => {
 })
 
 describe('Windows user registry environment fallback', () => {
+
+  it.each(['', '  \t  '])('treats process.env value %j as unset and reads the registry', async value => {
+    const candidate = await windowsCandidate('WorkBuddyAI.exe')
+    vi.stubEnv(electronProfileFor(AI_VARIANT).envVar, value)
+    const reader = vi.fn(() => candidate)
+    const keyProvider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(AI_VARIANT), platform: 'win32', discovery: 'windows-workbuddy',
+      defaultElectronPath: undefined, readWindowsUserEnv: reader, spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    await expect(keyProvider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    expect(reader).toHaveBeenCalledTimes(1)
+    expect(keyProvider.helperPath()).toBe(candidate)
+  })
+
+  it('uses the default path when the registry has no configuration', async () => {
+    const defaultPath = await windowsCandidate('DefaultWorkBuddy.exe')
+    const reader = vi.fn(() => undefined)
+    const keyProvider = new WorkBuddyAtRestKeyProvider({
+      product: electronProfileFor(CN_VARIANT), platform: 'win32', discovery: 'windows-workbuddy',
+      defaultElectronPath: defaultPath, readWindowsUserEnv: reader, spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    await expect(keyProvider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+    expect(reader).toHaveBeenCalledTimes(1)
+    expect(keyProvider.helperPath()).toBe(defaultPath)
+  })
+
   it('reads the explicit variable from readWindowsUserEnv when process.env lacks it', async () => {
     const candidate = await windowsCandidate('WorkBuddyAI.exe')
     const calls: string[] = []
@@ -510,11 +536,12 @@ describe('Windows user registry environment fallback', () => {
 
   it('rejects with electron-path-invalid when readWindowsUserEnv points to a missing binary', async () => {
     const userEnvReader = vi.fn((varName: string) => varName === 'WORKBUDDY_AI_ELECTRON_BIN' ? join(root, 'non-existent.exe') : undefined)
+    const defaultPath = await windowsCandidate('Default.exe')
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(AI_VARIANT),
       discovery: 'windows-workbuddy',
       platform: 'win32',
-      defaultElectronPath: undefined,
+      defaultElectronPath: defaultPath,
       readWindowsUserEnv: userEnvReader,
     })
     await expect(provider.protectorKeyFor([KEY_ID])).rejects.toMatchObject({ reasonCode: 'electron-path-invalid' })
@@ -537,9 +564,10 @@ describe('Windows user registry environment fallback', () => {
     expect(userEnvReader).not.toHaveBeenCalled()
   })
 
-  it('skips registry query when the default path is usable', async () => {
+  it('prefers the registry configuration over a usable default path', async () => {
     const defaultPath = await windowsCandidate('DefaultWorkBuddy.exe')
-    const userEnvReader = vi.fn(() => join(root, 'from-registry.exe'))
+    const registryPath = await windowsCandidate('RegistryWorkBuddy.exe')
+    const userEnvReader = vi.fn(() => registryPath)
     const provider = new WorkBuddyAtRestKeyProvider({
       product: electronProfileFor(CN_VARIANT),
       discovery: 'windows-workbuddy',
@@ -549,8 +577,8 @@ describe('Windows user registry environment fallback', () => {
       spawnHelper: async () => PAYLOAD_TEXT,
     })
     await expect(provider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
-    expect(provider.helperPath()).toBe(defaultPath)
-    expect(userEnvReader).not.toHaveBeenCalled()
+    expect(provider.helperPath()).toBe(registryPath)
+    expect(userEnvReader).toHaveBeenCalledTimes(1)
   })
 
   it('caches the registry user env lookup across resolutions', async () => {

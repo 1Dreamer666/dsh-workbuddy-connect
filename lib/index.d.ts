@@ -957,7 +957,7 @@ declare class WorkBuddyAtRestKeyProvider {
    *
    * Order is the contract: an explicit path is used as-is and never falls back;
    * discovery runs only for a provider that was configured for it, and only
-   * after the platform default has been tried and found unusable.
+   * after explicit process and Windows registry configuration, then the platform default, have been tried.
    */
   private resolveElectronPath;
   /**

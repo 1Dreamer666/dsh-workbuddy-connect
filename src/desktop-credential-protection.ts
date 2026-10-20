@@ -1293,7 +1293,7 @@ export class WorkBuddyAtRestKeyProvider {
    *
    * Order is the contract: an explicit path is used as-is and never falls back;
    * discovery runs only for a provider that was configured for it, and only
-   * after the platform default has been tried and found unusable.
+   * after explicit process and Windows registry configuration, then the platform default, have been tried.
    */
   private async resolveElectronPath(): Promise<string> {
     if (this.explicitPath !== undefined) {
@@ -1315,20 +1315,10 @@ export class WorkBuddyAtRestKeyProvider {
         + ` set ${this.product.envVar} to the app's Electron binary`,
       )
     }
-    // Priority order, and the support boundary it encodes:
-    //
-    // 1. The default path is the ordinary case and costs one stat; it is the
-    //    app's own standard install, so it outranks anything this plugin
-    //    inferred for itself.
-    if (this.defaultPath !== undefined && isExecutable(this.defaultPath)) return this.defaultPath
-    // 2. On Windows, the variable the user set for this product. `process.env`
-    //    already supplied it when the host inherited it (the explicit branch
-    //    above); this reads the *user* environment, which a running host's
-    //    snapshot does not pick up. It deliberately outranks the path a
-    //    previous discovery settled on: an explicit choice must not be
-    //    silently overruled by an earlier guess, or a user who moves the app
-    //    and repoints the variable would keep hitting the old install.
-    if (this.platform === 'win32' && !(this.product.envVar in process.env)) {
+    // A registry-configured path is an explicit choice, ahead of the default
+    // installation and any path inferred by discovery. Blank process values
+    // are unset, matching the constructor's explicit-path handling.
+    if (this.platform === 'win32' && (process.env[this.product.envVar]?.trim() ?? '') === '') {
       const configured = await this.windowsUserEnvPath()
       if (configured !== undefined) {
         if (!isExecutable(configured)) {
@@ -1342,13 +1332,14 @@ export class WorkBuddyAtRestKeyProvider {
         return configured
       }
     }
-    // 3. A previously discovered path is re-checked rather than trusted: the app
+    if (this.defaultPath !== undefined && isExecutable(this.defaultPath)) return this.defaultPath
+    // A previously discovered path is re-checked rather than trusted: the app
     // may have been moved or removed since, and a stale path must not win.
     if (this.discoveredPath !== undefined) {
       if (isExecutable(this.discoveredPath)) return this.discoveredPath
       this.discoveredPath = undefined
     }
-    // 4. Candidate discovery across registry uninstall roots.
+    // Finally, candidate discovery across registry uninstall roots.
     const found = this.discovery === 'macos-workbuddy'
       ? await this.discoverMacosApp()
       : await this.discoverWindowsApp()
