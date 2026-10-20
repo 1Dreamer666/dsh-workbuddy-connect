@@ -37,6 +37,7 @@ import type { WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-paths.ts'
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
+import { versionDrift, versionDriftWarning } from './version-resolve.ts'
 import { legacySettingsOf, modernSettingsOf, resolveModernSettingsEntryId } from './legacy-settings.ts'
 import { CN_VARIANT, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 
@@ -241,8 +242,9 @@ export interface Config {
   /**
    * Request-retry policy both routes serve, in the `dsh-llm` provider-retry
    * contract (`mode`, plus `maxRetries`, `retryableCodes`, and `backoff` in
-   * normal mode). Omitted — or any omitted field — keeps the `dsh-llm`
-   * defaults: normal mode, 5 retries, 500 ms → 10 s doubling backoff, i.e.
+   * normal mode). Omission keeps the `dsh-llm` defaults. An explicit
+   * policy requires `mode`; other optional fields use that mode's defaults:
+   * normal mode, 5 retries, 500 ms → 10 s doubling backoff, i.e.
    * 500 ms + 1 s + 2 s + 4 s + 8 s ≈ 15.5 s of *scheduled* backoff in total
    * (jitter widens that to roughly 14–17 s). Each attempt's own request time
    * comes on top, so the default buys a little over 15 s of waiting, not a
@@ -812,7 +814,11 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['webServer'], webCtx => {
     // One update route for the whole bundle: it answers this npm package's
     // public version metadata only, so it is per-plugin, not per-variant.
-    registerWorkBuddyUpdateRoute(webCtx, { currentVersion: WORKBUDDY_CONNECT_VERSION })
+    const drift = versionDrift()
+  registerWorkBuddyUpdateRoute(webCtx, {
+    currentVersion: WORKBUDDY_CONNECT_VERSION,
+    ...drift === undefined ? {} : { manifestVersion: drift.manifest },
+  })
     for (const runtime of runtimes) {
       registerWorkBuddyStatusRoute(webCtx, {
         path: runtime.variant.statusPath,
