@@ -63,9 +63,10 @@ export const PROBE_RETRY_DELAYS_MS: readonly number[] = [4_000, 8_000, 16_000]
 export const PROBE_ATTEMPT_GAP_MS = 1_500
 
 /**
- * Ceiling for a whole sweep, retries included. Without it the worst case is
- * seven attempts each burning the full retry budget plus their own 30s timeout,
- * which is far longer than a user will wait on a card that says "detecting".
+ * Ceiling for a whole sweep, retries and request time included, as elapsed wall
+ * clock. Without it the worst case is seven attempts each burning the full retry
+ * budget plus their own 30s timeout, which is far longer than a user will wait on
+ * a card that says "detecting".
  */
 export const PROBE_TOTAL_BUDGET_MS = 180_000
 
@@ -192,6 +193,8 @@ export async function probeModel(options: {
   totalBudgetMs?: number
   /** Injected by tests to keep the suite instant; defaults to `setTimeout`. */
   wait?: (ms: number) => Promise<void>
+  /** Injected by tests to advance a virtual clock; defaults to `Date.now`. */
+  now?: () => number
 }): Promise<ProbeOutcome> {
   const sentinel = options.sentinel ?? randomSentinel
   const candidates = options.candidates ?? PROBE_EFFORT_CANDIDATES
@@ -201,13 +204,22 @@ export async function probeModel(options: {
   const attemptGapMs = options.attemptGapMs ?? PROBE_ATTEMPT_GAP_MS
   const totalBudgetMs = options.totalBudgetMs ?? PROBE_TOTAL_BUDGET_MS
   const wait = options.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
+  const now = options.now ?? Date.now
   let requests = 0
-  let waited = 0
+
+  // The budget is wall clock, not sleep time: a sweep that spends its 180s in
+  // seven 30s timeouts is over just as much as one that spends it waiting.
+  const deadline = now() + totalBudgetMs
+  const remaining = (): number => deadline - now()
+  const exhausted: ProbeAttempt = { status: 0, streamed: false, detail: 'probe budget exhausted' }
 
   const once = async (effort: string | undefined): Promise<ProbeAttempt> => {
+    const budget = remaining()
+    // No request may start past the deadline, and none may outlive it either.
+    if (budget <= 0) return exhausted
     requests += 1
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    const timer = setTimeout(() => controller.abort(), Math.min(timeoutMs, budget))
     try {
       return await options.send(effort, controller.signal)
     } catch (error: unknown) {
@@ -221,19 +233,23 @@ export async function probeModel(options: {
    * One attempt, retried while the upstream reports it is busy. Throttling and
    * retrying are what make the sweep observable at all: a model that needs the
    * longest scan is usually the one whose quota a back-to-back scan exhausts
-   * (issue #182). A budget that runs out keeps the last answer, so this can only
-   * ever add time — never turn a rejection into an acceptance.
+   * (issue #182). A budget that runs out keeps the answer it already has, so
+   * this can only ever add time — never turn a rejection into an acceptance.
    */
   const attempt = async (effort: string | undefined): Promise<ProbeAttempt> => {
-    if (attemptGapMs > 0 && requests > 0 && waited + attemptGapMs <= totalBudgetMs) {
-      waited += attemptGapMs
+    if (attemptGapMs > 0 && requests > 0) {
+      // A gap that no longer fits means the sweep is over, not that the gap is
+      // free: firing the request anyway is what let the budget be overrun.
+      if (attemptGapMs > remaining()) return exhausted
       await wait(attemptGapMs)
     }
     let result = await once(effort)
     for (const delay of retryDelays) {
-      if (!isRetryable(result) || waited + delay > totalBudgetMs) return result
-      waited += delay
+      // Out of budget: keep the answer already collected rather than replacing
+      // a real upstream reply with a clock reading.
+      if (!isRetryable(result) || delay > remaining()) return result
       await wait(delay)
+      if (remaining() <= 0) return result
       result = await once(effort)
     }
     return result

@@ -245,6 +245,16 @@ declare function probeModel(options: {
   candidates?: readonly WorkBuddyEffort[];
   timeoutMs?: number;
   region?: ProbeRegion;
+  /** Zeroed by tests; production uses {@link PROBE_RETRY_DELAYS_MS}. */
+  retryDelaysMs?: readonly number[];
+  /** Zeroed by tests; production uses {@link PROBE_ATTEMPT_GAP_MS}. */
+  attemptGapMs?: number;
+  /** Zeroed by tests; production uses {@link PROBE_TOTAL_BUDGET_MS}. */
+  totalBudgetMs?: number;
+  /** Injected by tests to keep the suite instant; defaults to `setTimeout`. */
+  wait?: (ms: number) => Promise<void>;
+  /** Injected by tests to advance a virtual clock; defaults to `Date.now`. */
+  now?: () => number;
 }): Promise<ProbeOutcome>;
 //#endregion
 //#region src/upstream.d.ts

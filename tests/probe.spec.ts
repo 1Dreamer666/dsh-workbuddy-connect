@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   PROBE_EFFORT_CANDIDATES,
   PROBE_RETRY_DELAYS_MS,
@@ -59,6 +59,12 @@ const NO_WAIT = {
   attemptGapMs: 0,
   totalBudgetMs: Number.MAX_SAFE_INTEGER,
   wait: async () => {},
+}
+
+/** A clock the test advances by hand, so a stubbed request can still take time. */
+function virtualClock(): { now: () => number; advance: (ms: number) => void } {
+  let t = 0
+  return { now: () => t, advance: ms => { t += ms } }
 }
 
 /** A 429 as the upstream frames it: application quota, complete JSON body. */
@@ -195,6 +201,85 @@ describe('probeModel', () => {
     // Baseline once, sentinel answered 429 once: the retry never fit the budget.
     expect(outcome.requests).toBe(2)
     expect(slept).toBe(0)
+  })
+
+  it('counts a slow response against the budget, not just the waits', async () => {
+    // The budget is wall clock. A request that eats the whole thing leaves no
+    // room for the next stage, so the sweep stops instead of overrunning it.
+    const clock = virtualClock()
+    const busy: ProbeSender = async effort => {
+      clock.advance(200)
+      return effort === undefined ? ACCEPTED : BUSY
+    }
+    const outcome = await probeModel({
+      send: busy,
+      sentinel: () => SENTINEL,
+      retryDelaysMs: [200],
+      attemptGapMs: 0,
+      totalBudgetMs: 500,
+      wait: async ms => { clock.advance(ms) },
+      now: clock.now,
+    })
+    expect(outcome.validation).toBe('unknown')
+    // Baseline (0–200) and the sentinel (200–400) both ran. Only 100ms is left,
+    // so the 200ms retry never starts and the 429 stands.
+    expect(outcome.requests).toBe(2)
+    expect(clock.now()).toBe(400)
+  })
+
+  it('skips an attempt whose gap no longer fits instead of running it anyway', async () => {
+    // The overrun this replaces: the gap was skipped, the request still fired.
+    const clock = virtualClock()
+    const busy: ProbeSender = async effort => {
+      clock.advance(400)
+      return effort === undefined ? ACCEPTED : BUSY
+    }
+    const outcome = await probeModel({
+      send: busy,
+      sentinel: () => SENTINEL,
+      retryDelaysMs: [],
+      attemptGapMs: 300,
+      totalBudgetMs: 500,
+      wait: async ms => { clock.advance(ms) },
+      now: clock.now,
+    })
+    expect(outcome.validation).toBe('unknown')
+    // Baseline ran (0–400). The sentinel's 300ms gap does not fit in the 100ms
+    // left, so no second request is made at all.
+    expect(outcome.requests).toBe(1)
+    expect(clock.now()).toBe(400)
+  })
+
+  it('clamps a request to the time the budget still allows', async () => {
+    // A hung request must not outlive the budget by its own 30s timeout.
+    vi.useFakeTimers()
+    try {
+      const start = Date.now()
+      let abortedAfter: number | undefined
+      const hangOnSentinel: ProbeSender = (effort, signal) =>
+        effort === undefined
+          ? Promise.resolve(ACCEPTED)
+          : new Promise<ProbeAttempt>(resolve => {
+              signal.addEventListener('abort', () => {
+                abortedAfter = Date.now() - start
+                resolve({ status: 0, streamed: false })
+              })
+            })
+      const pending = probeModel({
+        send: hangOnSentinel,
+        sentinel: () => SENTINEL,
+        timeoutMs: 30_000,
+        retryDelaysMs: [],
+        attemptGapMs: 0,
+        totalBudgetMs: 500,
+        wait: async () => {},
+      })
+      await vi.advanceTimersByTimeAsync(500)
+      expect((await pending).validation).toBe('unknown')
+      expect(abortedAfter).toBe(500)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not treat a bare 400 as an effort rejection', async () => {
