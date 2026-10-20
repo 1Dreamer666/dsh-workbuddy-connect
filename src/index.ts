@@ -36,6 +36,7 @@ import type { WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-paths.ts'
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
+import { versionDrift, versionDriftWarning } from './version-resolve.ts'
 import { legacySettingsOf, modernSettingsOf, resolveModernSettingsEntryId } from './legacy-settings.ts'
 import { CN_VARIANT, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 
@@ -789,7 +790,11 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['webServer'], webCtx => {
     // One update route for the whole bundle: it answers this npm package's
     // public version metadata only, so it is per-plugin, not per-variant.
-    registerWorkBuddyUpdateRoute(webCtx, { currentVersion: WORKBUDDY_CONNECT_VERSION })
+    const drift = versionDrift()
+  registerWorkBuddyUpdateRoute(webCtx, {
+    currentVersion: WORKBUDDY_CONNECT_VERSION,
+    ...drift === undefined ? {} : { manifestVersion: drift.manifest },
+  })
     for (const runtime of runtimes) {
       registerWorkBuddyStatusRoute(webCtx, {
         path: runtime.variant.statusPath,
