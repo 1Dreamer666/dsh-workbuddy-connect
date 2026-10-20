@@ -1,4 +1,5 @@
 import z from "@deepseek-ai/schemastery";
+import { ResolvedRetryPolicy, RetryPolicyConfig } from "@deepseek-ai/dsh-llm";
 import "@earendil-works/pi-ai";
 import { PiAiAdapter, PiAiAdapterOptions } from "@deepseek-ai/dsh-llm-pi-ai";
 import { Context } from "@deepseek-ai/cordis";
@@ -1407,6 +1408,15 @@ interface WorkBuddyAdapterOptions {
    * `'cn'`, the same legacy default `providerId` carries.
    */
   region?: WorkBuddyRegion;
+  /**
+   * Retry policy this route serves, resolved by the caller from its plugin
+   * config. An adapter cannot read plugin config, and the value it would
+   * otherwise capture — normal mode, 5 retries, 500 ms → 10 s backoff — is too
+   * short to outlast WorkBuddy's multi-minute upstream outages, which surface
+   * as `TypeError: fetch failed` once the budget runs out. Omission keeps
+   * those defaults, so an unconfigured user is unaffected.
+   */
+  retryPolicy?: ResolvedRetryPolicy;
   shim: WorkBuddyShim;
   store: WorkBuddyCredentialStore;
   catalog: WorkBuddyCatalog;
@@ -1750,6 +1760,21 @@ interface Config {
   probeConsent?: boolean;
   /** Use the largest context window the international catalog explicitly offers. */
   useMaximumContextWindow?: boolean;
+  /**
+   * Request-retry policy both routes serve, in the `dsh-llm` provider-retry
+   * contract (`mode`, plus `maxRetries`, `retryableCodes`, and `backoff` in
+   * normal mode). Omission keeps the `dsh-llm` defaults. An explicit
+   * policy requires `mode`; other optional fields use that mode's defaults:
+   * normal mode, 5 retries, 500 ms → 10 s doubling backoff, i.e.
+   * 500 ms + 1 s + 2 s + 4 s + 8 s ≈ 15.5 s of *scheduled* backoff in total
+   * (jitter widens that to roughly 14–17 s). Each attempt's own request time
+   * comes on top, so the default buys a little over 15 s of waiting, not a
+   * recovery window. Raise `maxRetries` and the `backoff` ceiling to ride out
+   * a multi-minute upstream outage; `mode: 'always'` retries every failure
+   * until success, cancellation, or disposal and is not the default. Read once
+   * at plugin load.
+   */
+  retryPolicy?: RetryPolicyConfig;
 }
 declare const Config: z<Config>;
 /**

@@ -111,6 +111,24 @@ dsh plugin --profile web exec dsh-workbuddy-connect doctor --provider workbuddy-
 
 `logout` removes only that version's plugin-owned credential copy. It leaves the desktop app's own sign-in alone and does not promise the model group will disappear (the app's credential file still supplies one).
 
+## Configuration
+
+`retryPolicy` is plugin config (the `llm-workbuddy` entry in `cordis.yml`) shared by both versions; it is read once when the plugin loads, so reload or restart DSH after editing it.
+
+```yaml
+llm-workbuddy:
+  retryPolicy:
+    mode: normal
+    maxRetries: 15
+    backoff:
+      initialDelayMs: 2000
+      maxDelayMs: 30000
+```
+
+- **Omitting the entire `retryPolicy` preserves the existing behavior**. When configuring it explicitly, `mode` is required; other optional fields use the defaults for the selected mode. Without configuration, the `dsh-llm` defaults apply, i.e. `mode: normal`, 5 retries, 500 ms doubling to a 10 s ceiling. That totals only ~**15.5 s of scheduled backoff** (≈14–17 s across the jitter range), with each attempt's own request time added on top, so it is not a guarantee of recovery within any fixed window.
+- **The example above** schedules up to ~360 s of backoff (≈396 s at the jitter edge) plus request time — enough for a multi-minute upstream outage, but still not a fixed-window guarantee; a longer outage needs a higher `maxRetries` or another route.
+- `mode: always` retries every failure until success, cancellation, or disposal with **no attempt cap**. It is not the default and is never enabled by omission; use it only when you accept that a request may not return for a long time.
+
 ## Known limitations
 
 - Verified on macOS with the DSH Web / Desktop / TUI profiles (as of 0.3.2 this requires `0.1.5-rc.1`+ and Node 22+; TUI requires the terminal UI package `0.10.0-beta.5` or newer — see the Install section). Windows probes Local and Roaming AppData in order; WSL first reads credentials from the mounted Windows user profile. If the Windows and Linux user names differ and Windows environment variables are not forwarded into WSL, point `WORKBUDDY_AUTH_FILE` (or `WORKBUDDY_AI_AUTH_FILE` for the international version) at the actual file.

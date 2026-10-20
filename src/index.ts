@@ -15,7 +15,8 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
+import { resolveImageAttachmentAccess, resolveRetryPolicy, RetryPolicySchema } from '@deepseek-ai/dsh-llm'
+import type { RetryPolicyConfig, ResolvedRetryPolicy } from '@deepseek-ai/dsh-llm'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { WorkBuddyCredentialStore, type WorkBuddyCredential, type WorkBuddyStoreOptions } from './auth.ts'
@@ -238,6 +239,21 @@ export interface Config {
   probeConsent?: boolean
   /** Use the largest context window the international catalog explicitly offers. */
   useMaximumContextWindow?: boolean
+  /**
+   * Request-retry policy both routes serve, in the `dsh-llm` provider-retry
+   * contract (`mode`, plus `maxRetries`, `retryableCodes`, and `backoff` in
+   * normal mode). Omission keeps the `dsh-llm` defaults. An explicit
+   * policy requires `mode`; other optional fields use that mode's defaults:
+   * normal mode, 5 retries, 500 ms → 10 s doubling backoff, i.e.
+   * 500 ms + 1 s + 2 s + 4 s + 8 s ≈ 15.5 s of *scheduled* backoff in total
+   * (jitter widens that to roughly 14–17 s). Each attempt's own request time
+   * comes on top, so the default buys a little over 15 s of waiting, not a
+   * recovery window. Raise `maxRetries` and the `backoff` ceiling to ride out
+   * a multi-minute upstream outage; `mode: 'always'` retries every failure
+   * until success, cancellation, or disposal and is not the default. Read once
+   * at plugin load.
+   */
+  retryPolicy?: RetryPolicyConfig
 }
 
 /** Explicit CN desktop auth-file path (shared by the plugin schema and its section). */
@@ -255,6 +271,9 @@ const PROBE_CONSENT_FIELD = z.boolean().default(false)
 // {@link plainConfigBoolean} below.
 const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true).volatile()
   .description('Use the largest context window declared by WorkBuddy AI when alternatives are available (on by default)')
+/** Provider retry policy (shared by both routes; default is the dsh-llm policy). */
+const RETRY_POLICY_FIELD = RetryPolicySchema
+  .description('Model-request retry policy (defaults: normal mode, 5 retries, 500 ms → 10 s backoff)')
 
 // Same `.volatile()` typing artifact as {@link AI_SECTION}: the static
 // default type of the marked field is `Volatile<boolean>`, while consumers
@@ -265,6 +284,7 @@ export const Config = z.object({
   authFileAI: AUTH_FILE_AI_FIELD,
   probeConsent: PROBE_CONSENT_FIELD,
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
+  retryPolicy: RETRY_POLICY_FIELD,
 }) as unknown as z<Config>
 
 /**
@@ -308,6 +328,8 @@ const AI_SECTION = z.object({
 /** One variant's live runtime, assembled by {@link createVariantRuntime}. */
 interface VariantRuntime {
   variant: WorkBuddyVariant
+  /** Retry policy both this variant's route serves, resolved from the plugin config. */
+  retryPolicy: ResolvedRetryPolicy
   store: WorkBuddyCredentialStore
   client: WorkBuddyUpstreamClient
   catalog: WorkBuddyCatalog
@@ -467,6 +489,7 @@ function createVariantRuntime(
   })
   return {
     variant,
+    retryPolicy: resolveRetryPolicy(config.retryPolicy, `dsh-workbuddy-connect: ${variant.id} retryPolicy`),
     store,
     client,
     catalog,
@@ -575,6 +598,7 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
     const workbuddy = createWorkBuddyAdapter({
       providerId: variant.id,
       displayName: variant.displayName,
+      retryPolicy: runtime.retryPolicy,
       // From the variant descriptor, never inferred: it selects the CN-only
       // `onlyReasoning` rule that keeps an always-failing `off` out of the
       // picker (#87).
