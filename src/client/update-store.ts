@@ -25,6 +25,8 @@ const ROUTE_TIMEOUT_MS = 30_000
 export type WorkBuddyUpdateSnapshot = {
   status: 'idle' | 'checking' | WorkBuddyUpdateResult['status']
   currentVersion: string
+  /** Manifest version when it differs from the loaded build; the host forwards it. */
+  manifestVersion?: string
   checkedAt?: number
   latestVersion?: string
   releases?: readonly WorkBuddyUpdateRelease[]
@@ -50,6 +52,7 @@ function resultSnapshot(result: WorkBuddyUpdateResult, dismissedNotice?: string)
   return {
     status: result.status,
     currentVersion: result.currentVersion,
+    ...result.manifestVersion === undefined ? {} : { manifestVersion: result.manifestVersion },
     ...result.status === 'up-to-date' || result.status === 'update-available'
       ? { latestVersion: result.latestVersion }
       : {},

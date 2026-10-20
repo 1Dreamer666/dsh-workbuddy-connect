@@ -166,12 +166,21 @@ export function WorkBuddyUpdateOverlay({ t = DEFAULT_T, updater }: WorkBuddyUpda
   const [copyFailed, setCopyFailed] = useState(false)
   const [recheckRequested, setRecheckRequested] = useState(false)
 
-  const noticeKey = latestVersion === undefined ? undefined : `${snapshot.currentVersion}:${latestVersion}`
+  // A split between the loaded build and the manifest is worth surfacing on
+  // its own: the update check answers against the build, while the install
+  // directory already declares another version.
+  const driftVersion = snapshot.manifestVersion !== undefined && snapshot.manifestVersion !== snapshot.currentVersion
+    ? snapshot.manifestVersion
+    : undefined
+  const available0 = snapshot.status === 'update-available'
+  const noticeKey = latestVersion !== undefined
+    ? `${snapshot.currentVersion}:${latestVersion}`
+    : driftVersion === undefined ? undefined : `${snapshot.currentVersion}:${driftVersion}`
   const pendingRecheck = recheckRequested && (snapshot.status === 'checking' || snapshot.status === 'unavailable')
   // The floating seat stays invisible unless there is something to say: no
   // new version, a dismissed pair, or a transient failure all render nothing.
   // A pending recheck keeps the panel so it does not vanish mid-interaction.
-  if (!pendingRecheck && (snapshot.status !== 'update-available' || noticeKey === undefined || snapshot.dismissedNotice === noticeKey)) return null
+  if (!pendingRecheck && ((!available0 && driftVersion === undefined) || noticeKey === undefined || snapshot.dismissedNotice === noticeKey)) return null
   const available = snapshot.status === 'update-available'
   const releases = snapshot.releases ?? []
   const agentPrompt = t('agentUpgradePrompt', { repository: WORKBUDDY_REPOSITORY_URL })
@@ -203,7 +212,12 @@ export function WorkBuddyUpdateOverlay({ t = DEFAULT_T, updater }: WorkBuddyUpda
               : releases.map(release => <ReleaseRow key={release.version} release={release} t={t} />)}
           </div>
         </>
-        : <p style={bodyStyle}>{t('updateCheckUnavailable')}</p>}
+        : driftVersion === undefined ? <p style={bodyStyle}>{t('updateCheckUnavailable')}</p> : null}
+      {driftVersion === undefined ? null : (
+        <p style={{ ...bodyStyle, fontSize: 12, margin: 0 }}>
+          {t('manifestVersionDrift', { build: snapshot.currentVersion, manifest: driftVersion })}
+        </p>
+      )}
       <div style={sectionStyle}>
         <div style={promptRowStyle}>
           <code style={promptTextStyle}>{agentPrompt}</code>

@@ -44,11 +44,15 @@ export type WorkBuddyUpdateResult =
     status: 'up-to-date'
     currentVersion: string
     latestVersion: string
+    /** Manifest version, present only when it differs from the loaded build. */
+    manifestVersion?: string
   }
   | {
     status: 'update-available'
     currentVersion: string
     latestVersion: string
+    /** Manifest version, present only when it differs from the loaded build. */
+    manifestVersion?: string
     releaseUrl: string
     /**
      * Releases between (current, latest], newest first. Empty — with
@@ -62,6 +66,8 @@ export type WorkBuddyUpdateResult =
   | {
     status: 'unavailable'
     currentVersion: string
+    /** Manifest version, present only when it differs from the loaded build. */
+    manifestVersion?: string
     reason: 'invalid-current-version' | 'registry-unavailable' | 'invalid-registry-response'
   }
 
