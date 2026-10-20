@@ -856,6 +856,11 @@ interface WorkBuddyAtRestKeyProviderOptions {
   tools?: WorkBuddyDiscoveryTools;
   /** Windows registry discovery subprocess; injectable so tests never spawn. */
   windowsTools?: WorkBuddyWindowsDiscoveryTools;
+  /**
+   * Windows environment variable registry reader, for testing and dynamic
+   * fallback when `process.env` lacks the variable.
+   */
+  readWindowsUserEnv?: (varName: string) => Promise<string | undefined> | string | undefined;
   /** Platform override for deterministic discovery tests. */
   platform?: NodeJS.Platform;
   /**
@@ -876,7 +881,8 @@ interface WorkBuddyAtRestKeyProviderOptions {
  * In-memory protector-key resolver: one spawn per key id, single-flight, never
  * persisted. The cache is keyed by the id envelopes ask for, so an envelope
  * sealed under a rotated key triggers exactly one fresh resolution.
- */ declare class WorkBuddyAtRestKeyProvider {
+ */
+declare class WorkBuddyAtRestKeyProvider {
   /**
    * The explicit binary, when one was configured. `undefined` here means "the
    * caller did not name one", which is what lets discovery run — an explicit
@@ -889,6 +895,7 @@ interface WorkBuddyAtRestKeyProviderOptions {
   private readonly discovery;
   private readonly tools;
   private readonly windowsTools;
+  private readonly readWindowsUserEnv;
   private readonly platform;
   private readonly discoveryBudgetMs;
   private readonly timeoutMs;
@@ -901,6 +908,12 @@ interface WorkBuddyAtRestKeyProviderOptions {
    * the app without restarting DSH.
    */
   private discoveredPath;
+  /**
+   * The explicit binary this product's variable names in the Windows user
+   * environment, cached only when the environment actually named one. A miss
+   * stays uncached — see {@link windowsUserEnvPath}.
+   */
+  private userEnvCache;
   private cache;
   private inflight;
   constructor(options: WorkBuddyAtRestKeyProviderOptions);
@@ -924,11 +937,27 @@ interface WorkBuddyAtRestKeyProviderOptions {
   protectorKeyFor(requested: readonly string[]): Promise<Buffer>;
   private ingest;
   /**
+   * The explicit binary named in the Windows *user* environment, when
+   * `process.env` does not carry it.
+   *
+   * A hit is cached: it is a user-level preference that only changes when
+   * someone edits it, and caching it keeps a warm path from re-spawning
+   * `reg.exe` on every poll. A miss is deliberately **not** cached. The whole
+   * point of this branch is the window in which the variable is missing from
+   * the running host's snapshot — the user reads the card's diagnostic, adds
+   * the variable, and retries without restarting DSH. Remembering "it was not
+   * there" would pin the failing answer for the life of the process, which is
+   * exactly the case this fallback exists to fix. The read is bounded
+   * (1500ms, async) and only runs while the variable is absent, so a retry
+   * costs one short subprocess per attempt and stops as soon as it succeeds.
+   */
+  private windowsUserEnvPath;
+  /**
    * The binary to spawn, or a diagnosable error saying why there is none.
    *
    * Order is the contract: an explicit path is used as-is and never falls back;
    * discovery runs only for a provider that was configured for it, and only
-   * after the platform default has been tried and found unusable.
+   * after explicit process and Windows registry configuration, then the platform default, have been tried.
    */
   private resolveElectronPath;
   /**
