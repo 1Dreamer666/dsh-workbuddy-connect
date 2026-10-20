@@ -228,7 +228,7 @@ export function WorkBuddyUpdateOverlay({ t = DEFAULT_T, updater }: WorkBuddyUpda
         </div>
         {copyFailed ? <p style={{ ...bodyStyle, fontSize: 12, margin: 0 }}>{t('agentPromptCopyFailed')}</p> : null}
         <div style={rowStyle}>
-          <button type="button" style={primaryButtonStyle} disabled={!available} onClick={() => { setRecheckRequested(true); void updater.refresh(true) }}>
+          <button type="button" style={primaryButtonStyle} disabled={!available && driftVersion === undefined} onClick={() => { setRecheckRequested(true); void updater.refresh(true) }}>
             {snapshot.status === 'checking' ? t('checkingForUpdates') : t('recheckAfterUpgrade')}
           </button>
           {snapshot.releaseUrl === undefined ? null : (

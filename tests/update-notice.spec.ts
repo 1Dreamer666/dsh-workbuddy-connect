@@ -168,6 +168,7 @@ describe('manifest drift delivery', () => {
       expect(store.getSnapshot().manifestVersion).toBe('0.7.11')
       expect(JSON.stringify(renderer.toJSON())).toContain('0.7.11')
       expect(JSON.stringify(renderer.toJSON())).toContain('0.7.9')
+      expect(renderer.root.findByProps({ children: en.recheckAfterUpgrade }).props.disabled).toBe(false)
       if (status !== 'unavailable') {
         const cached = new WorkBuddyUpdateStore('0.7.9')
         try {
