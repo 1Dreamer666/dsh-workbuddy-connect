@@ -174,10 +174,12 @@ Pinned-version install example: `dsh plugin --profile web add dsh-workbuddy-conn
 
 ## Disclaimer
 
-- This project is for **personal learning and research only**, driving your own WorkBuddy account on your own machine. Do not use it commercially or beyond reasonable personal use.
-- Users must comply with the WorkBuddy terms of service. Any consequence of using this project (including but not limited to account restrictions, depleted credit, or service interruption) is borne by the user.
+- This project is for **personal learning and research only**, driving your own WorkBuddy / WorkBuddy AI account on your own machine. Do not use it commercially or beyond reasonable personal use.
+- This project is not affiliated with, authorized by, or endorsed by Tencent, WorkBuddy, or DeepSeek. Product names are used only to describe compatibility; trademarks belong to their respective owners.
+- **Third-party access carries account risks.** The official terms of service restrict unauthorized third-party access. Using this project may result in account or feature restrictions, account bans, or suspension or termination of service. Successful requests and normal credit deductions do not imply official authorization or the absence of account risks.
+- Please understand these risks and decide for yourself whether to install and use this project. Account restrictions, credit losses, service interruptions, and other consequences arising from its use are borne by the user. If you cannot accept these risks, use the official client.
+- This project does not guarantee continued service availability, freedom from account restrictions, or consistently accurate credit displays. The developer cannot control the platform's restrictions, penalties, or service changes.
 - The author is not liable for any direct or indirect loss arising from the use or misuse of this project.
-- This project is not affiliated with, endorsed by, or sponsored by Tencent, WorkBuddy, or DeepSeek. Product names are used for compatibility description only; trademarks belong to their respective owners.
 
 ## Related Projects / Community Ecosystem
 
