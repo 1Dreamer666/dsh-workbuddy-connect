@@ -329,16 +329,21 @@ export function parseWorkBuddyUpdateResult(value: unknown): WorkBuddyUpdateResul
   const record = value as Record<string, unknown>
   const currentVersion = record['currentVersion']
   if (typeof currentVersion !== 'string' || parseWorkBuddyVersion(currentVersion) === undefined) return undefined
+  const rawManifestVersion = record['manifestVersion']
+  const manifestVersion = typeof rawManifestVersion === 'string' && parseWorkBuddyVersion(rawManifestVersion) !== undefined
+    ? rawManifestVersion
+    : undefined
+  const drift = manifestVersion === undefined || manifestVersion === currentVersion ? {} : { manifestVersion }
   if (record['status'] === 'unavailable') {
     const reason = record['reason']
     return reason === 'invalid-current-version' || reason === 'registry-unavailable' || reason === 'invalid-registry-response'
-      ? { status: 'unavailable', currentVersion, reason }
+      ? { status: 'unavailable', currentVersion, reason, ...drift }
       : undefined
   }
   const latestVersion = record['latestVersion']
   if (typeof latestVersion !== 'string' || parseWorkBuddyVersion(latestVersion) === undefined) return undefined
   if (record['status'] === 'up-to-date') {
-    return { status: 'up-to-date', currentVersion, latestVersion }
+    return { status: 'up-to-date', currentVersion, latestVersion, ...drift }
   }
   if (record['status'] !== 'update-available' || compareWorkBuddyVersions(latestVersion, currentVersion) <= 0) return undefined
   const expectedUrl = releasePageUrl(latestVersion)
@@ -369,6 +374,7 @@ export function parseWorkBuddyUpdateResult(value: unknown): WorkBuddyUpdateResul
     && (typeof rawVersionsBehind !== 'number' || !Number.isSafeInteger(rawVersionsBehind) || rawVersionsBehind !== releases.length)) return undefined
   return {
     status: 'update-available',
+    ...drift,
     currentVersion,
     latestVersion,
     releaseUrl: expectedUrl,

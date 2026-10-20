@@ -173,9 +173,10 @@ export function WorkBuddyUpdateOverlay({ t = DEFAULT_T, updater }: WorkBuddyUpda
     ? snapshot.manifestVersion
     : undefined
   const available0 = snapshot.status === 'update-available'
-  const noticeKey = latestVersion !== undefined
+  const versionPair = latestVersion !== undefined
     ? `${snapshot.currentVersion}:${latestVersion}`
     : driftVersion === undefined ? undefined : `${snapshot.currentVersion}:${driftVersion}`
+  const noticeKey = driftVersion === undefined ? versionPair : `${versionPair}:manifest:${driftVersion}`
   const pendingRecheck = recheckRequested && (snapshot.status === 'checking' || snapshot.status === 'unavailable')
   // The floating seat stays invisible unless there is something to say: no
   // new version, a dismissed pair, or a transient failure all render nothing.

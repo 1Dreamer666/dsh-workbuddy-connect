@@ -159,6 +159,7 @@ export class WorkBuddyUpdateStore {
       status: 'checking',
       currentVersion: this.currentVersion,
       ...this.snapshot.latestVersion === undefined ? {} : { latestVersion: this.snapshot.latestVersion },
+      ...this.snapshot.manifestVersion === undefined ? {} : { manifestVersion: this.snapshot.manifestVersion },
       ...this.snapshot.dismissedNotice === undefined ? {} : { dismissedNotice: this.snapshot.dismissedNotice },
     })
     try {
