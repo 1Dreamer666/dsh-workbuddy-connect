@@ -478,9 +478,10 @@ describe('WorkBuddy adapter retry policy', () => {
 
   it('serves the resolved policy its plugin config handed it', () => {
     // WorkBuddy's upstream can drop every request for minutes; the default
-    // budget (5 retries, ~2 minutes) exhausts inside such a window and the
-    // turn fails with a transport error. The plugin config is where that
-    // budget is raised, so the adapter must serve exactly what it resolved.
+    // budget (5 retries ≈ 15.5 s of scheduled backoff, before per-request
+    // time) exhausts inside such a window and the turn fails with a transport
+    // error. The plugin config is where that budget is raised, so the adapter
+    // must serve exactly what it resolved.
     const policy = resolveRetryPolicy({
       mode: 'normal',
       maxRetries: 15,

@@ -32,6 +32,8 @@ describe('retryPolicy plugin config', () => {
     // `mode` is a closed set (`normal` | `always`): a typo must fail at load
     // rather than silently selecting a policy the runtime cannot execute.
     expect(() => Config({
+      // @ts-expect-error 'sometimes' is not in the closed set; the runtime
+      // schema, not the type checker, is what has to reject a hand-edited YAML.
       retryPolicy: { mode: 'sometimes' },
     })).toThrow()
   })

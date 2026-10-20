@@ -242,10 +242,14 @@ export interface Config {
    * Request-retry policy both routes serve, in the `dsh-llm` provider-retry
    * contract (`mode`, plus `maxRetries`, `retryableCodes`, and `backoff` in
    * normal mode). Omitted — or any omitted field — keeps the `dsh-llm`
-   * defaults: normal mode, 5 retries, 500 ms → 10 s backoff, which is about
-   * two minutes of total waiting. Raise `maxRetries` and the `backoff` ceiling
-   * to ride out a multi-minute upstream outage instead of failing the turn
-   * with a transport error. Read once at plugin load.
+   * defaults: normal mode, 5 retries, 500 ms → 10 s doubling backoff, i.e.
+   * 500 ms + 1 s + 2 s + 4 s + 8 s ≈ 15.5 s of *scheduled* backoff in total
+   * (jitter widens that to roughly 14–17 s). Each attempt's own request time
+   * comes on top, so the default buys a little over 15 s of waiting, not a
+   * recovery window. Raise `maxRetries` and the `backoff` ceiling to ride out
+   * a multi-minute upstream outage; `mode: 'always'` retries every failure
+   * until success, cancellation, or disposal and is not the default. Read once
+   * at plugin load.
    */
   retryPolicy?: RetryPolicyConfig
 }

@@ -112,6 +112,24 @@ dsh plugin --profile web exec dsh-workbuddy-connect doctor --provider workbuddy-
 
 `logout` 只删除该版插件自留的凭据副本，不动桌面 App 自己的登录，也不承诺一定让模型分组消失（App 的凭据文件仍在时依然生效）。
 
+## 配置
+
+重试策略是插件配置项（`cordis.yml` 中 `llm-workbuddy` 的插件配置），国内版与国际版共用同一份；只在插件加载时读取一次，改完需重载或重启 DSH 才生效。
+
+```yaml
+llm-workbuddy:
+  retryPolicy:
+    mode: normal
+    maxRetries: 15
+    backoff:
+      initialDelayMs: 2000
+      maxDelayMs: 30000
+```
+
+- **省略 `retryPolicy`（或省略其中任一字段）即保持原行为**：沿用 `dsh-llm` 默认值——`mode: normal`、5 次重试、500 ms 起翻倍、10 s 封顶。默认值合计只有约 **15.5 秒的退避等待**（抖动区间约 14–17 秒），每次请求自身的耗时另计，因此它不构成「在固定时间窗口内必然恢复」的保证。
+- **上面的示例**最多会排入约 360 秒退避（抖动上限约 396 秒），每次请求耗时再加在其上，适合覆盖数分钟级的上游中断；但同样不保证在某个固定窗口内恢复，中断更久时仍需调大 `maxRetries` 或换线路。
+- `mode: always` 表示**不设次数上限**，一直重试到成功、取消或插件卸载；它不是默认值，也不会因省略配置而被启用，只有在明确接受「请求可能长时间不返回」时才使用。
+
 ## 已知限制
 
 - 在 macOS 的 DSH Web / Desktop / TUI 下验证通过（0.3.2 起要求 `0.1.5-rc.1`+、Node 22+；TUI 需终端界面插件 `0.10.0-beta.5` 及以上，见安装章节说明）。Windows 会依次探测 Local 与 Roaming AppData；WSL 会优先从挂载的 Windows 用户目录读取登录凭据。若 Windows 与 Linux 用户名不同且 Windows 环境变量未传入 WSL，请通过 `WORKBUDDY_AUTH_FILE`（国际版为 `WORKBUDDY_AI_AUTH_FILE`）指定实际位置。
