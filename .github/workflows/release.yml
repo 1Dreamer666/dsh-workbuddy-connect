@@ -75,14 +75,31 @@ jobs:
             # files in about sixty seconds.
             failures=0
             for f in $(ls tests/*.spec.ts | sort); do
-              if ! timeout -k 5 120s pnpm exec vitest run "$f" --reporter=verbose \
+              out="$(mktemp)"
+              # `--foreground` matters. Without it `timeout` signals the child's
+              # process *group*, and pnpm runs its own child: the timer fires,
+              # the wrapper dies, and a live vitest is left holding the temp
+              # directories the following files need. That matches the shape
+              # these failures took — a file that passes alone failing once an
+              # earlier one was killed — so anything left behind is reaped too
+              # before the next file starts.
+              if timeout --foreground -k 10 180s pnpm exec vitest run "$f" --reporter=verbose \
                     --reporter=junit --outputFile.junit="ci-logs/$(basename "$f" .spec.ts).xml" \
-                    >> ci-logs/test.log 2>&1; then
-                echo "::error::${f} failed or timed out on ubuntu"
+                    > "$out" 2>&1; then
+                cat "$out" >> ci-logs/test.log
+              else
+                rc=$?
+                # Echo the failing file's own output into the job log: writing
+                # everything to a file and printing only the tail is what made
+                # the first run's failure unreadable from the console.
+                echo "::error::${f} failed or timed out on ubuntu (rc=${rc})"
+                cat "$out" | tail -60
+                cat "$out" >> ci-logs/test.log
                 failures=$((failures + 1))
+                pkill -f 'vitest' >/dev/null 2>&1 || true
               fi
+              rm -f "$out"
             done
-            tail -40 ci-logs/test.log
             [ "$failures" -eq 0 ]
           else
             pnpm exec vitest run --reporter=verbose --reporter=junit \
