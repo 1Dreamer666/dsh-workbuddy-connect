@@ -24,17 +24,35 @@ permissions:
 
 jobs:
   verify:
-    name: verify (Node ${{ matrix.node }}, ${{ matrix.os }})
+    name: verify (${{ matrix.os }}${{ matrix.shards > 1 && format(' shard {0}/{1}', matrix.shard, matrix.shards) || '' }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
       fail-fast: true
+      # Enumerated rather than computed: a matrix entry cannot reference
+      # `matrix.os` from inside its own matrix, so the shard count is spelled
+      # out per runner. Linux runs the suite in two shards — the full parallel
+      # run sat indefinitely there while every file passed on its own, and
+      # halving the workload keeps one bad file from consuming the step budget.
+      # The other two runners keep a single shard; they have never shown it.
       matrix:
-        # The release artifact is platform-independent, but the suite is not:
-        # the Windows registry and path handling are only exercised there, and
-        # the macOS binary discovery only on macOS.
-        os: [ubuntu-latest, windows-2022, macos-latest]
-        node: [22]
+        include:
+          - os: ubuntu-latest
+            node: 22
+            shard: 1
+            shards: 2
+          - os: ubuntu-latest
+            node: 22
+            shard: 2
+            shards: 2
+          - os: windows-2022
+            node: 22
+            shard: 1
+            shards: 1
+          - os: macos-latest
+            node: 22
+            shard: 1
+            shards: 1
     defaults:
       run:
         shell: bash
@@ -52,15 +70,19 @@ jobs:
       - name: install dependencies
         run: pnpm install --frozen-lockfile
       # Bounded on purpose: an unbounded step is what turns one hung test into a
-      # job that burns the whole `timeout-minutes` with nothing in the log. On
-      # timeout the runner kills it and the verbose reporter names the test that
-      # was running.
+      # job that burns the whole `timeout-minutes` with nothing in the log.
       - name: typecheck
         timeout-minutes: 6
         run: pnpm run typecheck
       - name: test
         timeout-minutes: 12
-        run: pnpm test
+        run: |
+          set -euo pipefail
+          if [ '${{ matrix.shards }}' -gt 1 ]; then
+            pnpm exec vitest run --shard=${{ matrix.shard }}/${{ matrix.shards }}
+          else
+            pnpm test
+          fi
 
   # One shared gate for everything downstream, so the publish job cannot start
   # while any platform is still red.
