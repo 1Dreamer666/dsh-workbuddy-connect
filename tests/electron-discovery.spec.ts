@@ -14,6 +14,7 @@ import type { WorkBuddyDiscoveryTools } from '../src/desktop-credential-protecti
 import { WorkBuddyCredentialStore } from '../src/auth.ts'
 import { CN_VARIANT, AI_VARIANT , electronProfileFor} from '../src/variants.ts'
 import { isolateProductEnv } from './helpers/product-env.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 /**
  * Issue #48: the macOS Electron binary is no longer assumed to live at
@@ -76,7 +77,7 @@ isolateProductEnv()
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'wb-electron-discovery-'))
-  cleanups.push(async () => { await rm(root, { recursive: true, force: true }) })
+  cleanups.push(async () => { await removeTempDir(root) })
 })
 
 afterEach(async () => {

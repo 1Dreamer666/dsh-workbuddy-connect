@@ -1,5 +1,5 @@
 import { createServer, request } from 'node:http'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -8,6 +8,7 @@ import { workBuddyStatusHandler } from '../src/web-status.ts'
 import { WORKBUDDY_STATUS_PATH } from '../src/status-paths.ts'
 import type { WorkBuddyStatusRouteOptions } from '../src/web-status.ts'
 import type { WorkBuddyUpstreamModel } from '../src/upstream.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 const CLEANUP: (() => Promise<void>)[] = []
 
@@ -50,7 +51,7 @@ function requestOnce(options: {
 
 async function startStatusServer(overrides: Partial<WorkBuddyStatusRouteOptions> = {}): Promise<number> {
   const dir = await mkdtemp(join(tmpdir(), 'wb-status-'))
-  CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
+  CLEANUP.push(() => removeTempDir(dir))
   const desktop = join(dir, 'workbuddy-desktop.info')
   await writeFile(desktop, nestedDoc(Date.now() + 3600_000))
   const deps: WorkBuddyStatusRouteOptions = {

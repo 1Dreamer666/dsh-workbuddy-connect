@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { run } from '../src/bin.ts'
 import { sealAuthFieldForTest } from '../src/desktop-credential-protection.ts'
 import { deriveProtectorKey } from '../src/desktop-credential-protection.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 /**
  * Doctor's desktop-auth-file report: the on-disk format rides the output so a
@@ -59,7 +60,7 @@ describe('doctor desktop auth format', () => {
   let root: string
 
   afterEach(async () => {
-    if (root !== undefined) await rm(root, { recursive: true, force: true })
+    if (root !== undefined) await removeTempDir(root)
     root = undefined as unknown as string
     vi.unstubAllEnvs()
   })

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -10,6 +10,7 @@ import {
   validAppVersion,
   FALLBACK_APP_VERSION,
 } from '../src/app-version.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 /**
  * The App version is only ever a User-Agent component for the international
@@ -26,7 +27,7 @@ afterEach(async () => {
 
 async function tempPath(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'wb-appversion-'))
-  CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+  CLEANUP.push(() => removeTempDir(root))
   return join(root, 'version.json')
 }
 

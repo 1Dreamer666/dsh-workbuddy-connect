@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +8,7 @@ import { WorkBuddyCatalog } from '../src/catalog.ts'
 import { isFetchBlockedPort } from '../src/loopback.ts'
 import { createWorkBuddyShim, type WorkBuddyShim } from '../src/shim.ts'
 import type { WorkBuddyChatResult } from '../src/upstream.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 const CLEANUP: (() => Promise<void>)[] = []
 
@@ -113,7 +114,7 @@ function rawRequest(options: {
 
 async function startShim(upstreamResponse: () => WorkBuddyChatResult): Promise<Harness> {
   const dir = await mkdtemp(join(tmpdir(), 'wb-shim-'))
-  CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
+  CLEANUP.push(() => removeTempDir(dir))
   const desktop = join(dir, 'workbuddy-desktop.info')
   await writeFile(desktop, JSON.stringify({
     auth: { accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 3600_000, domain: 'www.codebuddy.cn' },

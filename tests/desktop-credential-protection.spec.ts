@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCipheriv, createHash } from 'node:crypto'
@@ -18,6 +18,7 @@ import {
 import { WorkBuddyCredentialStore } from '../src/auth.ts'
 import { AI_VARIANT, CN_VARIANT, electronProfileFor, type WorkBuddyVariant } from '../src/variants.ts'
 import { isolateProductEnv } from './helpers/product-env.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 // The provider reads a product's env var before any injected seam, so a host
 // that exports one would change these expectations. Absent, not blank.
@@ -348,7 +349,7 @@ describe('credential store with an encrypted desktop file', () => {
 
   it('decrypts the desktop credential, keeping identity and expiry', async () => {
     root = await mkdtemp(join(tmpdir(), 'wb-encrypted-'))
-    cleanups.push(async () => { await rm(root, { recursive: true, force: true }) })
+    cleanups.push(async () => { await removeTempDir(root) })
     const desktopPath = join(root, 'workbuddy-desktop.info')
     await writeFile(desktopPath, encryptedDocument())
     const store = makeStore(desktopPath, stubKeyProvider(KEY))
@@ -367,7 +368,7 @@ describe('credential store with an encrypted desktop file', () => {
 
   it('reports a decryption failure as a diagnosis, never as a silent sign-out or a stale fallback', async () => {
     root = await mkdtemp(join(tmpdir(), 'wb-encrypted-fail-'))
-    cleanups.push(async () => { await rm(root, { recursive: true, force: true }) })
+    cleanups.push(async () => { await removeTempDir(root) })
     const desktopPath = join(root, 'workbuddy-desktop.info')
     await writeFile(desktopPath, encryptedDocument())
     // A stale plugin-owned copy from the previous account: decryption failure
@@ -390,7 +391,7 @@ describe('credential store with an encrypted desktop file', () => {
 
   it('reports a key mismatch between envelope and app as its own diagnosis', async () => {
     root = await mkdtemp(join(tmpdir(), 'wb-encrypted-mismatch-'))
-    cleanups.push(async () => { await rm(root, { recursive: true, force: true }) })
+    cleanups.push(async () => { await removeTempDir(root) })
     const desktopPath = join(root, 'workbuddy-desktop.info')
     await writeFile(desktopPath, encryptedDocument(Buffer.alloc(32, 5)))
     // Envelopes sealed under a key the provider cannot answer (different
@@ -402,7 +403,7 @@ describe('credential store with an encrypted desktop file', () => {
 
   it('never falls back to a valid stale own copy when the desktop file is unreadable', async () => {
     root = await mkdtemp(join(tmpdir(), 'wb-unrecognized-'))
-    cleanups.push(async () => { await rm(root, { recursive: true, force: true }) })
+    cleanups.push(async () => { await removeTempDir(root) })
     const ownDocument = JSON.stringify({
       version: 1,
       credential: {
@@ -439,7 +440,7 @@ describe('credential store with an encrypted desktop file', () => {
 
   it('lets the desktop file keep identity authority over a newer own copy', async () => {
     root = await mkdtemp(join(tmpdir(), 'wb-encrypted-identity-'))
-    cleanups.push(async () => { await rm(root, { recursive: true, force: true }) })
+    cleanups.push(async () => { await removeTempDir(root) })
     const desktopPath = join(root, 'workbuddy-desktop.info')
     await writeFile(desktopPath, encryptedDocument())
     await writeFile(join(root, 'own.json'), JSON.stringify({

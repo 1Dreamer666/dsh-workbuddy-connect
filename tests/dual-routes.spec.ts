@@ -1,5 +1,5 @@
 import { createServer, request, type IncomingMessage, type ServerResponse } from 'node:http'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -9,6 +9,7 @@ import { workBuddyProbeHandler } from '../src/probe-route.ts'
 import { workBuddyStatusHandler } from '../src/web-status.ts'
 import { AI_VARIANT, CN_VARIANT, type WorkBuddyVariant } from '../src/variants.ts'
 import type { WorkBuddyUpstreamClient } from '../src/upstream.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 /**
  * Both variants' routes, mounted side by side on one server the way the plugin
@@ -122,7 +123,7 @@ async function mount(variant: WorkBuddyVariant, options: {
 describe('per-variant route mount', () => {
   it('serves each variant its own identity, credits, and models', async () => {
     const root = await mkdtemp(join(tmpdir(), 'wb-routes-'))
-    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(root))
     await writeFile(join(root, 'cn.info'), credentialDocument('copilot.tencent.com'))
     await writeFile(join(root, 'ai.info'), credentialDocument('www.workbuddy.ai'))
     vi.stubEnv('DSH_HOME', root)
@@ -175,7 +176,7 @@ describe('per-variant route mount', () => {
   it('hides every model when the catalog is gated off', async () => {
     const catalog = new WorkBuddyCatalog(FALLBACK_WORKBUDDY_AI_MODELS)
     const root = await mkdtemp(join(tmpdir(), 'wb-routes-'))
-    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(root))
     vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
     const server = await mount(AI_VARIANT, { catalog })
     catalog.setVisible(false)
@@ -239,7 +240,7 @@ describe('per-variant route mount', () => {
 
   it('never serves a credential belonging to the other product', async () => {
     const root = await mkdtemp(join(tmpdir(), 'wb-routes-'))
-    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(root))
     // The CN file is handed to the AI provider.
     await writeFile(join(root, 'wrong.info'), credentialDocument('copilot.tencent.com'))
     vi.stubEnv('DSH_HOME', root)
@@ -261,7 +262,7 @@ describe('per-variant route mount', () => {
     // answer depends on whether this machine happens to have the WorkBuddy AI
     // app signed in. The stub is the same one the neighbouring cases use.
     const root = await mkdtemp(join(tmpdir(), 'wb-routes-'))
-    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(root))
     await writeFile(join(root, 'ai.info'), credentialDocument('www.workbuddy.ai'))
     vi.stubEnv('DSH_HOME', root)
     vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'ai.info'))

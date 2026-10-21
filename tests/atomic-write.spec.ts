@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -6,10 +6,11 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { WorkBuddyCredentialStore } from '../src/auth.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 const cleanup: string[] = []
 afterEach(async () => {
-  for (const path of cleanup.splice(0)) await rm(path, { recursive: true, force: true })
+  for (const path of cleanup.splice(0)) await removeTempDir(path)
 })
 
 async function target(): Promise<string> {

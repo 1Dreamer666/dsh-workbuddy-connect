@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -6,6 +6,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import LlmRuntime, { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import * as WorkBuddy from '../src/index.ts'
 import { LegacySettingsService } from './helpers/legacy-settings.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 /**
  * Plugin-to-runtime wiring for `retryPolicy`.
@@ -51,7 +52,7 @@ afterEach(async () => {
 
 async function tempDir(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'wb-retry-'))
-  CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+  CLEANUP.push(() => removeTempDir(root))
   return root
 }
 

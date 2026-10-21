@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -10,6 +10,7 @@ import {
   resolveChatIdentity,
   validCliVersion,
 } from '../src/client-identity.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 /**
  * Offline tests for the chat identity (plan §3, 阶段一离线检查): every
@@ -25,7 +26,7 @@ afterEach(async () => {
 
 async function tempDir(prefix: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), prefix))
-  CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+  CLEANUP.push(() => removeTempDir(root))
   return root
 }
 

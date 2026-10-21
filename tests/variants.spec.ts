@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -6,6 +6,7 @@ import { WorkBuddyCredentialStore, desktopAuthCandidatesFor, parseWorkBuddyAuth 
 import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatalog } from '../src/catalog.ts'
 import { AI_VARIANT, CN_VARIANT, variantFor, WORKBUDDY_VARIANTS } from '../src/variants.ts'
 import { modelWithCurrentPromotion, parseModelCatalog, prepareInternationalChatBody, WorkBuddyUpstreamClient } from '../src/upstream.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 /**
  * The two-variant contract. Both products share one auth directory and repeat
@@ -23,7 +24,7 @@ afterEach(async () => {
 
 async function tempDir(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'wb-variants-'))
-  CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+  CLEANUP.push(() => removeTempDir(root))
   return root
 }
 

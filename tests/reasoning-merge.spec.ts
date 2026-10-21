@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,7 @@ import * as WorkBuddy from '../src/index.ts'
 import { fingerprintModel } from '../src/probe-store.ts'
 import type { WorkBuddyModelInfo } from '../src/catalog.ts'
 import type { WorkBuddyProbeRecord } from '../src/probe-store.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 /**
  * End-to-end tests for the observation/declaration merge, driven through the
@@ -26,7 +27,7 @@ import type { WorkBuddyProbeRecord } from '../src/probe-store.ts'
 const CLEANUP: string[] = []
 
 afterEach(async () => {
-  for (const path of CLEANUP.splice(0)) await rm(path, { recursive: true, force: true })
+  for (const path of CLEANUP.splice(0)) await removeTempDir(path)
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
 })

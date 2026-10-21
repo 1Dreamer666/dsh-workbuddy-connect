@@ -15,6 +15,7 @@ import {
 import type { WorkBuddyWindowsDiscoveryTools } from '../src/desktop-credential-protection.ts'
 import { CN_VARIANT, AI_VARIANT , electronProfileFor} from '../src/variants.ts'
 import { isolateProductEnv } from './helpers/product-env.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 const SECRET = Buffer.alloc(32, 9).toString('base64')
 const PAYLOAD_TEXT = JSON.stringify({ version: 1, atRestSecretKey: SECRET })
@@ -35,7 +36,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true })
+  await removeTempDir(root)
   vi.unstubAllEnvs()
 })
 

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -8,6 +8,7 @@ import { WorkBuddyCatalog } from '../src/catalog.ts'
 import { createWorkBuddyShim, type WorkBuddyShim } from '../src/shim.ts'
 import type { WorkBuddyChatResult } from '../src/upstream.ts'
 import type { WorkBuddyCredential } from '../src/auth.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 /**
  * Issue #118, revision-2 evidence: where exactly do `tools` survive on the way
@@ -88,7 +89,7 @@ interface Harness {
 /** Start the real shim with a fake upstream client that captures bodies. */
 async function startHarness(upstream: () => WorkBuddyChatResult): Promise<Harness> {
   const dir = await mkdtemp(join(tmpdir(), 'wb-118-'))
-  CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
+  CLEANUP.push(() => removeTempDir(dir))
   const desktop = join(dir, 'workbuddy-desktop.info')
   await writeFile(desktop, JSON.stringify({
     auth: { accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 3600_000, domain: 'www.codebuddy.cn' },

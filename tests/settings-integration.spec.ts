@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFileSync } from 'node:fs'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -13,6 +13,7 @@ import * as WorkBuddy from '../src/index.ts'
 import { resolveModernSettingsEntryId } from '../src/legacy-settings.ts'
 import { LegacySettingsService } from './helpers/legacy-settings.ts'
 import { ModernSettingsForms } from './helpers/modern-settings.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 /**
  * Stands in for the Host's webServer service so the plugin's status and probe
@@ -82,7 +83,7 @@ afterEach(async () => {
     // rmdir, rm fails with ENOTEMPTY. A short retry absorbs that race.
     for (let attempt = 0; ; attempt += 1) {
       try {
-        await rm(root, { recursive: true, force: true })
+        await removeTempDir(root)
         break
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code

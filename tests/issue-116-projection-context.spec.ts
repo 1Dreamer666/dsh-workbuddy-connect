@@ -1,10 +1,11 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context, type Fiber } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import * as WorkBuddy from '../src/index.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 /**
  * `sessionProjections` is a host service (dsh-session-projection), not part of
@@ -83,7 +84,7 @@ afterEach(async () => {
   await context?.fiber.dispose()
   context = undefined
   if (root !== undefined) {
-    await rm(root, { recursive: true, force: true }).catch(() => {})
+    await removeTempDir(root).catch(() => {})
   }
   root = undefined
   vi.unstubAllEnvs()

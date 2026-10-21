@@ -1,0 +1,22 @@
+# Normalise line endings at the repository boundary.
+#
+# The sources are LF and the build artifacts are LF. On Windows, `core.autocrlf`
+# (true by default there) rewrites working-tree copies to CRLF, which made every
+# `git add` of a generated `lib/` file print a warning and — worse — risked
+# committing CRLF into a bundle the host loads on every platform. Pinning `eol=lf`
+# makes the checkout identical everywhere regardless of a contributor's
+# autocrlf setting.
+* text=auto eol=lf
+
+# Built bundles are generated and compared byte for byte by the release
+# workflow's pack check, so they must never be rewritten.
+lib/** text eol=lf
+
+# Windows-only helper scripts keep CRLF: `cmd` batch files misbehave on LF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary assets: never touch.
+*.png binary
+*.ico binary
+*.tgz binary

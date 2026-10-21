@@ -11,6 +11,7 @@ import {
   type WorkBuddyCredential,
 } from '../src/auth.ts'
 import { AI_VARIANT, CN_VARIANT } from '../src/variants.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 // node:os's ESM namespace rejects vi.spyOn (non-configurable), so homedir is
 // mocked at the module level; unset state falls through to the real one.
@@ -91,7 +92,7 @@ function credentialWith(expiresAtMs: number): WorkBuddyCredential {
 describe('WorkBuddyCredentialStore', () => {
   it('serves a fresh desktop credential without refreshing', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'wb-store-'))
-    CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(dir))
     const desktop = join(dir, 'workbuddy-desktop.info')
     await writeFile(desktop, nestedDoc(Date.now() + 3600_000))
     let refreshes = 0
@@ -109,7 +110,7 @@ describe('WorkBuddyCredentialStore', () => {
 
   it('refreshes an expiring credential, persists the copy, and serves it next', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'wb-store-'))
-    CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(dir))
     const desktop = join(dir, 'workbuddy-desktop.info')
     const own = join(dir, 'own.json')
     await writeFile(desktop, nestedDoc(Date.now() - 1000))
@@ -127,7 +128,7 @@ describe('WorkBuddyCredentialStore', () => {
 
   it('still returns a not-yet-expired token when refresh fails', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'wb-store-'))
-    CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(dir))
     const desktop = join(dir, 'workbuddy-desktop.info')
     await writeFile(desktop, nestedDoc(Date.now() + 60_000))
     const store = new WorkBuddyCredentialStore({
@@ -143,7 +144,7 @@ describe('WorkBuddyCredentialStore', () => {
 
   it('serves the persisted copy with its expiry and identity after the desktop file disappears', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'wb-store-'))
-    CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(dir))
     const desktop = join(dir, 'workbuddy-desktop.info')
     const own = join(dir, 'own.json')
     await writeFile(desktop, nestedDoc(Date.now() - 1000))
@@ -166,7 +167,7 @@ describe('WorkBuddyCredentialStore', () => {
 
   it('rejects an owned copy from another format version', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'wb-store-'))
-    CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(dir))
     const own = join(dir, 'own.json')
     await writeFile(own, JSON.stringify({ version: 99, credential: { accessToken: 'at' } }))
     const store = new WorkBuddyCredentialStore({
@@ -179,7 +180,7 @@ describe('WorkBuddyCredentialStore', () => {
 
   it('fails loudly when nothing is signed in', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'wb-store-'))
-    CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(dir))
     const store = new WorkBuddyCredentialStore({
       desktopPath: join(dir, 'missing.info'),
       ownPath: join(dir, 'own.json'),
@@ -190,7 +191,7 @@ describe('WorkBuddyCredentialStore', () => {
 
   it('applies a desktop-path repoint on the next read', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'wb-store-'))
-    CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(dir))
     const first = join(dir, 'workbuddy-a.info')
     const second = join(dir, 'workbuddy-b.info')
     await writeFile(first, nestedDoc(Date.now() + 3600_000))
@@ -221,7 +222,7 @@ describe('Windows default desktop path probing', () => {
   /** Fake a win32 home; probes are mocked in, dirs under a temp root. */
   async function fakeWindowsHome(): Promise<{ home: string, local: string, roaming: string }> {
     const home = await mkdtemp(join(tmpdir(), 'wb-win-'))
-    CLEANUP.push(() => rm(home, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(home))
     const local = join(home, 'AppData', 'Local', 'CodeBuddyExtension', 'Data', 'Public', 'auth', 'workbuddy-desktop.info')
     const roaming = join(home, 'AppData', 'Roaming', 'CodeBuddyExtension', 'Data', 'Public', 'auth', 'workbuddy-desktop.info')
     return { home, local, roaming }
@@ -460,7 +461,7 @@ async function asLinux<T>(options: {
     // diagnostic must agree, or doctor would name the empty config-home file
     // while authentication actually uses the data-home candidate.
     const root = await mkdtemp(join(tmpdir(), 'wb-xdg-empty-'))
-    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(root))
     const configHome = join(root, 'config')
     const dataHome = join(root, 'data')
     const configAuth = join(configHome, 'CodeBuddyExtension', 'Data', 'Public', 'auth')
@@ -489,7 +490,7 @@ async function asLinux<T>(options: {
     // when only the data-home copy exists, resolvedDesktopAuthPath() must
     // name it — for both variants.
     const root = await mkdtemp(join(tmpdir(), 'wb-xdg-resolved-'))
-    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(root))
     const configHome = join(root, 'config')
     const dataHome = join(root, 'data')
     const dataAuth = join(dataHome, 'CodeBuddyExtension', 'Data', 'Public', 'auth')
@@ -519,7 +520,7 @@ async function asLinux<T>(options: {
   // string-level test below.
   it.skipIf(process.platform === 'win32')('uses translated WSL environment paths when the Windows user differs', async () => {
     const root = await mkdtemp(join(tmpdir(), 'wb-wsl-'))
-    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+    CLEANUP.push(() => removeTempDir(root))
     const windowsProfile = join(root, 'Users', 'windows-alice')
     const local = join(windowsProfile, 'AppData', 'Local', AUTH_TAIL)
     await mkdir(join(local, '..'), { recursive: true })

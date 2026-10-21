@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -32,11 +32,12 @@ import {
   WORKBUDDY_HOST_HEARTBEAT_FILENAME,
 } from '../src/host-heartbeat.ts'
 import { WORKBUDDY_CONNECT_VERSION } from '../src/version.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 let root: string | undefined
 
 afterEach(async () => {
-  if (root !== undefined) await rm(root, { recursive: true, force: true })
+  if (root !== undefined) await removeTempDir(root)
   root = undefined
   wmic.output = undefined
   vi.restoreAllMocks()

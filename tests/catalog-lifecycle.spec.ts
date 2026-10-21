@@ -10,6 +10,7 @@ import { WorkBuddyCredentialStore } from '../src/auth.ts'
 import { fingerprintModel } from '../src/probe-store.ts'
 import { FALLBACK_WORKBUDDY_MODELS } from '../src/catalog.ts'
 import { LegacySettingsService } from './helpers/legacy-settings.ts'
+import { removeTempDir } from './support/temp-dir.ts'
 
 /**
  * Catalog lifecycle: what happens across a credential change and a failed fetch.
@@ -42,7 +43,7 @@ afterEach(async () => {
 
 async function tempDir(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'wb-lifecycle-'))
-  CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+  CLEANUP.push(() => removeTempDir(root))
   return root
 }
 
