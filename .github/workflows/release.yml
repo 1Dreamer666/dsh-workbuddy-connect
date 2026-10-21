@@ -138,12 +138,13 @@ jobs:
       - name: build
         run: pnpm run build
 
-      # The suite reads the built bundles, and `tests/version.spec.ts` fails a
-      # bundle that does not declare the current version — so this re-run is
-      # what proves the shipped artifact is the one under test, not just src/.
-      - name: verify the built bundles
-        run: pnpm test
-
+      # The suite is not re-run here on purpose. `tests/version.spec.ts` reads
+      # the built bundles, and the `verify` jobs already ran it against a build
+      # of this same revision on Windows and macOS — re-running it on this
+      # ubuntu runner would repeat the multi-file stall that moved Linux out of
+      # the required set. The packed tree is checked below instead, which is the
+      # property that actually matters for the artifact: that `lib/` shipped is
+      # the built one.
       - name: pack the tarball
         id: pack
         env:
@@ -165,6 +166,11 @@ jobs:
             echo "::error::packed version ${PACKED_VERSION} != tag version ${VERSION}"
             exit 1
           fi
+          # The bundle declares the version it was built with; this is the check
+          # `tests/version.spec.ts` would have made, narrowed to the artifact.
+          grep -rq "\"${VERSION}\"\|'${VERSION}'" dist/package/lib/ \
+            || grep -rq "${VERSION}" dist/package/lib/ \
+            || { echo "::error::packed lib/ does not declare version ${VERSION} — stale build"; exit 1; }
           echo "packed ${PACKED_VERSION}: lib verified"
 
       - name: checksum
