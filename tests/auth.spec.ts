@@ -337,8 +337,13 @@ describe('WSL default desktop path probing', () => {
     env?: Partial<Record<'APPDATA' | 'LOCALAPPDATA' | 'USERPROFILE', string>>
   }, run: () => Promise<T>): Promise<T> {
     const savedPlatform = process.platform
+    // XDG_CONFIG_HOME / XDG_DATA_HOME must be cleared here exactly as `asLinux`
+    // does: `xdgBase` prefers a non-empty absolute override over the injected
+    // home, so a value left set by an earlier test (or by the runner) silently
+    // replaces the `/home/alice` this helper promises. That is what made this
+    // case pass locally and resolve to `/home/runner` on CI.
     const savedEnv = Object.fromEntries(
-      ['APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'WSL_DISTRO_NAME', 'WSL_INTEROP']
+      ['APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'WSL_DISTRO_NAME', 'WSL_INTEROP', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME']
         .map(name => [name, process.env[name]]),
     )
     Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
@@ -349,6 +354,8 @@ describe('WSL default desktop path probing', () => {
     delete process.env['USERPROFILE']
     delete process.env['WSL_DISTRO_NAME']
     delete process.env['WSL_INTEROP']
+    delete process.env['XDG_CONFIG_HOME']
+    delete process.env['XDG_DATA_HOME']
     Object.assign(process.env, options.env)
     try {
       return await run()
