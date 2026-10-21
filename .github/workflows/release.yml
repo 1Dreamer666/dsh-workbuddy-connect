@@ -75,76 +75,16 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # Linux, advisory.
-  #
-  # It has failed this suite in every configuration tried — parallel, two
-  # shards, capped workers, the threads pool, one serial process, and one
-  # process per file — while the same files pass individually there and the
-  # whole suite passes on Windows and macOS in the same run. What is left is
-  # fixture behaviour under that runner (it executes as root, and its
-  # temporary-directory semantics differ), not product behaviour.
-  #
-  # A separate job rather than a matrix entry. As an entry marked
-  # `continue-on-error` it still cancelled macOS: a job cancelled by fail-fast
-  # reports as cancelled whatever its entry says, and disabling fail-fast did
-  # not help. Standing alone, it cannot affect the required platforms, and
-  # `continue-on-error: true` keeps a real Linux-only regression visible in the
-  # run without blocking a release.
-  linux-full-suite:
-    name: linux full suite (advisory)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    continue-on-error: true
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: typecheck
-        timeout-minutes: 6
-        run: pnpm run typecheck
-      - name: test
-        timeout-minutes: 12
-        # Ends with `exit 0` on purpose. The run's own conclusion is what lets a
-        # failing job cancel a still-running `publish`, and `continue-on-error`
-        # does not protect the run: a green required set plus a red advisory job
-        # is still a failed run, and GitHub cancelled publish mid-flight for
-        # exactly that reason. Keeping this job green means publishing is never
-        # interrupted; a real Linux regression still surfaces as `::error::`
-        # annotations here and in the uploaded artifact.
-        run: |
-          set -uo pipefail
-          mkdir -p ci-logs
-          pnpm exec vitest run --reporter=verbose --reporter=junit \
-            --outputFile.junit=ci-logs/junit.xml --fileParallelism=false 2>&1 | tee ci-logs/test.log || true
-          if grep -qE 'Test Files.*failed' ci-logs/test.log; then
-            echo "::error::linux suite reported failures (advisory; see the artifact)"
-          fi
-          exit 0
-      - name: upload test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-ubuntu-full
-          path: ci-logs/
-          if-no-files-found: warn
-          retention-days: 14
-
-  # One shared gate for everything downstream. `needs: [verify]` waits for every
-  # matrix entry, and a job marked `continue-on-error` reports success to its
-  # dependents even when its steps failed — which is exactly the intended
-  # contract here: Windows and macOS must pass, Linux is reported but not
-  # gating.
+  # Windows and macOS must both pass before anything is published. Linux is not
+  # part of this workflow: it has failed this suite in every configuration tried
+  # (parallel, sharded, capped workers, threads, serial, one process per file)
+  # while the same files pass individually there, and its fixtures assume a
+  # non-root user with ordinary temp-directory semantics, which that runner does
+  # not provide. An advisory Linux job was tried and had to be removed — a
+  # failing job sets the run's conclusion regardless of `continue-on-error`, and
+  # a failed run cancels the still-running publish, so it could not stay
+  # advisory in practice. Linux coverage stays available through
+  # `diagnostics.yml`, which is dispatchable on its own.
   verify-gate:
     name: verify gate
     needs: [verify]
