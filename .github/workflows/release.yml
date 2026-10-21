@@ -78,11 +78,27 @@ jobs:
         timeout-minutes: 12
         run: |
           set -euo pipefail
+          mkdir -p ci-logs
+          # `--reporter=junit` is what makes a hang diagnosable after the fact:
+          # the XML lists every file's start and end, so a step that is killed
+          # still shows which file never finished instead of just going silent.
           if [ '${{ matrix.shards }}' -gt 1 ]; then
-            pnpm exec vitest run --shard=${{ matrix.shard }}/${{ matrix.shards }}
+            pnpm exec vitest run --shard=${{ matrix.shard }}/${{ matrix.shards }} \
+              --reporter=verbose --reporter=junit --outputFile.junit=ci-logs/junit.xml \
+              2>&1 | tee ci-logs/test.log
           else
-            pnpm test
+            pnpm exec vitest run \
+              --reporter=verbose --reporter=junit --outputFile.junit=ci-logs/junit.xml \
+              2>&1 | tee ci-logs/test.log
           fi
+      - name: upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.os }}-shard${{ matrix.shard }}
+          path: ci-logs/
+          if-no-files-found: warn
+          retention-days: 14
 
   # One shared gate for everything downstream, so the publish job cannot start
   # while any platform is still red.
