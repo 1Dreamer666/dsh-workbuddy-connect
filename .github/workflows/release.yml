@@ -38,7 +38,11 @@ jobs:
     # repository cannot fix.
     continue-on-error: ${{ matrix.os == 'ubuntu-latest' }}
     strategy:
-      fail-fast: true
+      # ail-fast must stay off: it cancels sibling entries as soon as one
+      # fails, and a cancelled job is not continue-on-error — the advisory
+      # Linux entry would take macOS down with it. Each platform must be able
+      # to finish and report on its own.
+      fail-fast: false
       # Enumerated rather than a plain os list so the shard-free shape is
       # explicit: a matrix entry cannot reference `matrix.os` from inside its
       # own matrix, and the earlier computed form was rejected for that reason.
