@@ -51,8 +51,16 @@ jobs:
           cache: pnpm
       - name: install dependencies
         run: pnpm install --frozen-lockfile
-      - name: typecheck and test
-        run: pnpm run typecheck && pnpm test
+      # Bounded on purpose: an unbounded step is what turns one hung test into a
+      # job that burns the whole `timeout-minutes` with nothing in the log. On
+      # timeout the runner kills it and the verbose reporter names the test that
+      # was running.
+      - name: typecheck
+        timeout-minutes: 6
+        run: pnpm run typecheck
+      - name: test
+        timeout-minutes: 12
+        run: pnpm test
 
   # One shared gate for everything downstream, so the publish job cannot start
   # while any platform is still red.
