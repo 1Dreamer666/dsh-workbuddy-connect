@@ -38,7 +38,7 @@ jobs:
     # repository cannot fix.
     continue-on-error: ${{ matrix.os == 'ubuntu-latest' }}
     strategy:
-      # ail-fast must stay off: it cancels sibling entries as soon as one
+      # fail-fast must stay off: it cancels sibling entries as soon as one
       # fails, and a cancelled job is not continue-on-error — the advisory
       # Linux entry would take macOS down with it. Each platform must be able
       # to finish and report on its own.
