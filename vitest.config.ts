@@ -31,13 +31,13 @@ export default defineConfig({
     // thread it can only ask to stop.
     teardownTimeout: 10_000,
     pool: 'forks',
-    // Deliberately NOT serialising files on CI. Doing that was tried and made
-    // the ubuntu job slower than the hang it was meant to diagnose: 60 files
-    // one after another could not finish inside the step budget. Parallelism
-    // stays on, and a hang is named by the verbose reporter plus
-    // `teardownTimeout` instead.
-    // The Windows registry integration test spawns PowerShell 5.1
-    // subprocesses and has its own measured budget, so it is excluded from
-    // the parallelism question rather than being given a slower pool.
+    // `pool: 'forks'` plus the default worker count sat indefinitely on the
+    // ubuntu runner: every file passes when run on its own (verified by
+    // dispatching the suite in halves), but the full parallel run stalled with
+    // no file ever reported. The runner has 4 vCPUs and each fork here imports
+    // the whole pi-ai surface, so the default fan-out oversubscribes it.
+    // Two workers keeps the run parallel enough to fit the step budget while
+    // staying inside what the runner can actually hold.
+    ...process.env.CI === 'true' ? { maxWorkers: 2, minWorkers: 1 } : {},
   },
 })
