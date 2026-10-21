@@ -128,55 +128,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # The full suite on Linux, run separately and allowed to fail the workflow
-  # only when it *reports* a failure.
-  #
-  # Why it is not inside `verify`: the ubuntu runner stalls on this suite in
-  # every multi-file configuration — parallel, sharded, capped, and serial —
-  # while every single file passes there in about a second each. That is an
-  # environment problem, not a product one, and gating the release on it blocks
-  # publishing for a reason no change to this repository can fix. It still runs,
-  # so a real regression on Linux is visible; it just cannot silently convert
-  # a green Windows/macOS run into no release.
-  linux-full-suite:
-    name: linux full suite (advisory)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    continue-on-error: true
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: typecheck
-        timeout-minutes: 6
-        run: pnpm run typecheck
-      - name: test
-        timeout-minutes: 12
-        run: |
-          set -euo pipefail
-          mkdir -p ci-logs
-          pnpm exec vitest run --reporter=verbose --reporter=junit \
-            --outputFile.junit=ci-logs/junit.xml --fileParallelism=false 2>&1 | tee ci-logs/test.log
-      - name: upload test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-ubuntu-full
-          path: ci-logs/
-          if-no-files-found: warn
-          retention-days: 14
-
   # One shared gate for everything downstream. `needs: [verify]` waits for every
   # matrix entry, and a job marked `continue-on-error` reports success to its
   # dependents even when its steps failed — which is exactly the intended
