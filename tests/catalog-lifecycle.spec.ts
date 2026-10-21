@@ -517,6 +517,11 @@ describe('identity changes during catalog loading', () => {
     }))
 
     const resolve = WorkBuddyCredentialStore.prototype.resolve
+    // Switch the on-disk credential exactly once, on the FIRST resolve. Since
+    // #201 a CN refresh resolves once and then reads two documents, so the
+    // first resolve is still the right hook — but the switch must not depend on
+    // how many resolves follow, which is an implementation detail of how many
+    // documents a refresh needs.
     let switched = false
     vi.spyOn(WorkBuddyCredentialStore.prototype, 'resolve').mockImplementation(async function (this: WorkBuddyCredentialStore) {
       if (!switched) {
@@ -527,9 +532,12 @@ describe('identity changes during catalog loading', () => {
     })
 
     const ctx = await boot()
+    // The invariant under test is that account A's roster is never *saved* under
+    // uid-a, not that account B wins within a fixed number of ticks. Wait for
+    // B's roster to be served, then assert on what was persisted.
     await vi.waitFor(async () => {
       expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-b-model'])
-    })
+    }, { timeout: 20_000, interval: 50 })
     const saved = JSON.parse(await readFile(join(root, '.workbuddy-catalog.json'), 'utf8')) as { entries: Record<string, unknown> }
     expect(saved.entries['uid-a:ent-1']).toBeUndefined()
     expect(saved.entries['uid-b:ent-1']).toBeDefined()
