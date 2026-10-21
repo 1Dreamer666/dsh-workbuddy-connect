@@ -30,14 +30,17 @@ export default defineConfig({
     // each file a real child process vitest can kill outright instead of a
     // thread it can only ask to stop.
     teardownTimeout: 10_000,
-    pool: 'forks',
-    // `pool: 'forks'` plus the default worker count sat indefinitely on the
-    // ubuntu runner: every file passes when run on its own (verified by
-    // dispatching the suite in halves), but the full parallel run stalled with
-    // no file ever reported. The runner has 4 vCPUs and each fork here imports
-    // the whole pi-ai surface, so the default fan-out oversubscribes it.
-    // Two workers keeps the run parallel enough to fit the step budget while
-    // staying inside what the runner can actually hold.
+    // `pool: 'forks'` sat indefinitely on the ubuntu runner: every file passes
+    // when run on its own (verified by dispatching the suite in halves), and
+    // the sharded runs narrowed it to a stable half of the files, yet the
+    // combined process never reported another file. `threads` shares one
+    // process instead of forking one per file, which removes the per-file
+    // process lifecycle that never settled there. `isolate: true` keeps each
+    // file's module state separate, so the suite still starts from a clean
+    // slate per file the way the fork pool did.
+    pool: 'threads',
+    // Two workers: the runner has four vCPUs and each worker imports the whole
+    // pi-ai surface, so the default fan-out oversubscribes it.
     ...process.env.CI === 'true' ? { maxWorkers: 2, minWorkers: 1 } : {},
   },
 })
