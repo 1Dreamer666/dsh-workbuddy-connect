@@ -1,0 +1,172 @@
+name: release
+
+# Publishing is triggered by pushing a version tag, and only for tags on this
+# repository's own history: a fork pushing a v* tag must never be able to
+# publish under this name. The tag's version is additionally checked against
+# package.json below, so a mistyped tag fails before anything is uploaded.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build and publish, e.g. v0.8.0
+        required: true
+        type: string
+      publish:
+        description: Upload the tarball to the GitHub release (unchecked = build and keep as an artifact only)
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (Node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: true
+      matrix:
+        # The release artifact is platform-independent, but the suite is not:
+        # the Windows registry and path handling are only exercised there, and
+        # the macOS binary discovery only on macOS.
+        os: [ubuntu-latest, windows-2022, macos-latest]
+        node: [22]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - name: install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: typecheck and test
+        run: pnpm run typecheck && pnpm test
+
+  # One shared gate for everything downstream, so the publish job cannot start
+  # while any platform is still red.
+  verify-gate:
+    name: verify gate
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "all verification jobs passed"
+
+  publish:
+    name: build and publish
+    needs: verify-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    # `workflow_dispatch` may build without publishing; a tag push always publishes.
+    if: github.event_name == 'push' || inputs.publish
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: resolve and validate the version
+        id: version
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          # A push event carries the tag as refs/tags/vX.Y.Z; a dispatch carries it as an input.
+          RAW_TAG="${{ inputs.tag || github.ref_name }}"
+          TAG_VERSION="${RAW_TAG#v}"
+          echo "package.json: ${PACKAGE_VERSION}"
+          echo "tag:          ${RAW_TAG}"
+          if [ "${PACKAGE_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "::error::tag ${RAW_TAG} does not match package.json version ${PACKAGE_VERSION}"
+            exit 1
+          fi
+          echo "version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${RAW_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: build
+        run: pnpm run build
+
+      # The suite reads the built bundles, and `tests/version.spec.ts` fails a
+      # bundle that does not declare the current version — so this re-run is
+      # what proves the shipped artifact is the one under test, not just src/.
+      - name: verify the built bundles
+        run: pnpm test
+
+      - name: pack the tarball
+        id: pack
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          pnpm pack --pack-destination dist
+          TARBALL="$(ls dist/*.tgz | head -n 1)"
+          echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "${TARBALL}")" >> "$GITHUB_OUTPUT"
+          # `prepack` re-runs the build, so unpack and assert what actually ships
+          # rather than trusting the working tree.
+          tar -xzf "${TARBALL}" -C dist
+          test -f dist/package/lib/index.js || { echo "::error::lib/index.js missing from the tarball"; exit 1; }
+          grep -rq 'personal/models' dist/package/lib/ || { echo "::error::the CN catalog union is missing from the packed lib/"; exit 1; }
+          grep -rq '11128\|DeepSeek' dist/package/lib/ || { echo "::error::the CN body fixes are missing from the packed lib/"; exit 1; }
+          PACKED_VERSION="$(node -p "require('./dist/package/package.json').version")"
+          if [ "${PACKED_VERSION}" != "${VERSION}" ]; then
+            echo "::error::packed version ${PACKED_VERSION} != tag version ${VERSION}"
+            exit 1
+          fi
+          echo "packed ${PACKED_VERSION}: lib verified"
+
+      - name: checksum
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum *.tgz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-tarball
+          path: |
+            dist/*.tgz
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: upload to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          # A release may already exist (created by hand, as v0.8.0 was) — then
+          # attach to it rather than failing on a duplicate.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release ${TAG} exists; uploading assets"
+            gh release upload "$TAG" dist/*.tgz dist/SHA256SUMS.txt --clobber
+          else
+            gh release create "$TAG" dist/*.tgz dist/SHA256SUMS.txt \
+              --title "$TAG" \
+              --generate-notes
+          fi
