@@ -1,24 +1,23 @@
 name: locate-hang
 
-# One-off diagnostic: run the suite in a few explicit groups, alternating the
-# POSIX-only and cross-platform files, so a file that hangs before reporting can
-# be narrowed to a handful of candidates in one dispatch. Delete this workflow
-# once the hang is identified and fixed.
+# One-off diagnostic for the ubuntu stall. Runs the second half of the suite one
+# file per vitest process, each behind a hard `timeout`, so the file that does
+# not print DONE is the culprit. Delete once the cause is fixed.
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: half-a runs files 0-29, half-b runs 30-59, posix runs the Linux-sensitive subset
+      half:
+        description: which half of the sorted file list to run
         required: true
-        default: posix
+        default: second
         type: choice
-        options: [half-a, half-b, posix]
+        options: [first, second]
 permissions:
   contents: read
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -33,54 +32,23 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      - name: select the group
-        id: group
-        run: |
-          set -euo pipefail
-          mapfile -t ALL < <(ls tests/*.spec.ts | sort)
-          case "${{ inputs.mode }}" in
-            half-a) FILES=("${ALL[@]:0:30}") ;;
-            half-b) FILES=("${ALL[@]:30}") ;;
-            posix)
-              FILES=(
-                tests/app-version.spec.ts
-                tests/loopback.spec.ts
-                tests/atomic-write.spec.ts
-                tests/probe-service.spec.ts
-                tests/probe-route.spec.ts
-                tests/web-status.spec.ts
-                tests/model-visibility.spec.ts
-                tests/update-route.spec.ts
-                tests/settings-integration.spec.ts
-                tests/catalog-lifecycle.spec.ts
-                tests/auth.spec.ts
-                tests/host-heartbeat.spec.ts
-              ) ;;
-          esac
-          printf '%s\n' "${FILES[@]}" > ci-group.txt
-          echo "running ${#FILES[@]} files"
-          cat ci-group.txt
-
-      # Each file gets its own vitest process with a hard timeout, so a hang
-      # names the file instead of stalling the job: the first file that does not
-      # print DONE is the culprit.
-      - name: run each file with a per-file timeout
+      - name: run each file under a hard timeout
         run: |
           set -uo pipefail
-          FAILED=0
-          while read -r f; do
-            echo "::group::${f}"
-            if timeout 90s pnpm exec vitest run "$f" --reporter=dot; then
-              echo "DONE ${f}"
+          mapfile -t ALL < <(ls tests/*.spec.ts | sort)
+          if [ '${{ inputs.half }}' = 'first' ]; then
+            FILES=("${ALL[@]:0:30}")
+          else
+            FILES=("${ALL[@]:30}")
+          fi
+          echo "running ${#FILES[@]} files"
+          for f in "${FILES[@]}"; do
+            start=$(date +%s)
+            if timeout -k 5 120s pnpm exec vitest run "$f" --reporter=dot > /tmp/out.log 2>&1; then
+              echo "DONE $(($(date +%s)-start))s ${f}"
             else
               rc=$?
-              if [ "$rc" -eq 124 ]; then
-                echo "TIMEOUT ${f}"
-              else
-                echo "FAILED ${f} (rc=${rc})"
-                FAILED=1
-              fi
+              echo "::error::$([ "$rc" -eq 124 ] && echo TIMEOUT || echo FAILED) ${f} (rc=${rc})"
+              tail -40 /tmp/out.log
             fi
-            echo "::endgroup::"
-          done < ci-group.txt
-          exit "$FAILED"
+          done
