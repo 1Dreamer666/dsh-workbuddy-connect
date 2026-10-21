@@ -31,11 +31,13 @@ export default defineConfig({
     // thread it can only ask to stop.
     teardownTimeout: 10_000,
     pool: 'forks',
-    // One file at a time on CI: the Windows registry integration test spawns
-    // PowerShell 5.1 subprocesses, and under a concurrent run their startup
-    // budget measures runner contention rather than the step. Serialising
-    // also makes a hang attributable to a single file in the log.
-    fileParallelism: process.env.CI !== 'true',
-    ...process.env.CI === 'true' ? { maxWorkers: 2, minWorkers: 1 } : {},
+    // Deliberately NOT serialising files on CI. Doing that was tried and made
+    // the ubuntu job slower than the hang it was meant to diagnose: 60 files
+    // one after another could not finish inside the step budget. Parallelism
+    // stays on, and a hang is named by the verbose reporter plus
+    // `teardownTimeout` instead.
+    // The Windows registry integration test spawns PowerShell 5.1
+    // subprocesses and has its own measured budget, so it is excluded from
+    // the parallelism question rather than being given a slower pool.
   },
 })
