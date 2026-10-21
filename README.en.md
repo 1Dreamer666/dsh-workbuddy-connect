@@ -2,6 +2,12 @@
 
 English | [中文](./README.md)
 
+> **Maintenance status**: the original repository `corrinehu/dsh-workbuddy-connect`
+> is no longer available. This fork maintains the project from **0.8.0** onwards,
+> carrying the full commit history and every contributor's credit.
+> Maintainer: [@Venshell](https://github.com/Venshell) ｜ Original author:
+> [@corrinehu](https://github.com/corrinehu) ｜ Full list in [AUTHORS.md](./AUTHORS.md)
+
 Brings the models available in your signed-in WorkBuddy / WorkBuddy AI desktop app into [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness); the two versions each show their own model group and reuse their own account sign-in and credit.
 
 ## Install
@@ -154,7 +160,7 @@ The plugin version must match the DSH core — a mismatched combination fails to
 | `0.1.2-rc.1` | `0.3.1` | Older line, historical maintenance only. |
 | `0.1.1-rc.2` | `0.2.6` | Older line, historical maintenance only. |
 
-Release history (full records at [releases](https://github.com/corrinehu/dsh-workbuddy-connect/releases)):
+Release history (full records at [releases](https://github.com/Venshell/dsh-workbuddy-connect/releases)):
 
 - **0.7.9**: restores the international edition's maximum-context switch on DSH 0.2.1-rc.2, including delayed initialization and persistent settings (PR [#172](https://github.com/corrinehu/dsh-workbuddy-connect/pull/172), by @1Dreamer666); avoids fetch-blocked local ports that could cause international-edition 502 errors (PR [#164](https://github.com/corrinehu/dsh-workbuddy-connect/pull/164), by @Xiong-Ziyi); combines credit packages with the same name to reduce repeated entries.
 - **0.7.8**: adapts to DSH 0.2.1-rc.2; bundles the official atomic-write helper instead of relying on host module exposure; refreshes the China catalog snapshot and distinguishes Hy3 / Hy3-X; improves probe result labels and fixes the credit-refresh placement and tooltip. Thanks to @chenpiyanghappy for PR [#156](https://github.com/corrinehu/dsh-workbuddy-connect/pull/156).

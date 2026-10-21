@@ -2,8 +2,11 @@
   "name": "dsh-workbuddy-connect",
   "displayName": "DSH WorkBuddy Connect",
   "description": "将 WorkBuddy 桌面 App 包含的模型自动接入 DeepSeek Harness — bring WorkBuddy desktop app models into DeepSeek Harness with zero configuration.",
-  "version": "0.7.9",
-  "author": "corrinehu",
+  "version": "0.8.0",
+  "author": "Corrine Hu <corrinehu@gmail.com> (original author)",
+  "contributors": [
+    { "name": "Venshell", "url": "https://github.com/Venshell" }
+  ],
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
@@ -47,10 +50,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/corrinehu/dsh-workbuddy-connect.git"
+    "url": "git+https://github.com/Venshell/dsh-workbuddy-connect.git"
   },
-  "homepage": "https://github.com/corrinehu/dsh-workbuddy-connect#readme",
-  "bugs": "https://github.com/corrinehu/dsh-workbuddy-connect/issues",
+  "homepage": "https://github.com/Venshell/dsh-workbuddy-connect#readme",
+  "bugs": "https://github.com/Venshell/dsh-workbuddy-connect/issues",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

@@ -60,7 +60,13 @@ describe('issue #123: catalog identity headers', () => {
   it('an enterprise account presents the pair on both catalog requests', async () => {
     const { calls } = captureCatalogWire()
     await new WorkBuddyUpstreamClient().fetchModels(ENTERPRISE)
+    // Since #201 the CN catalog reads the console document first (it still
+    // carries the `cli` agent the product document stopped serving) and the
+    // product document second; each console read is followed by the badge
+    // read on the same path. Identity headers must ride every one of them.
     expect(calls.map(call => call.url)).toEqual([
+      'https://www.codebuddy.cn/v2/enterprises/personal/models',
+      'https://copilot.tencent.com/console/enterprises/personal/models',
       'https://copilot.tencent.com/v3/config',
       'https://copilot.tencent.com/console/enterprises/personal/models',
     ])
@@ -75,7 +81,7 @@ describe('issue #123: catalog identity headers', () => {
   it('a personal account keeps the bare catalog headers of 0.7.5', async () => {
     const { calls } = captureCatalogWire()
     await new WorkBuddyUpstreamClient().fetchModels(PERSONAL)
-    expect(calls).toHaveLength(2)
+    expect(calls).toHaveLength(4)
     for (const { headers } of calls) {
       expect(headers['X-User-Id']).toBeUndefined()
       expect(headers['X-Enterprise-Id']).toBeUndefined()

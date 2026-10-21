@@ -736,7 +736,7 @@ describe('CN catalog: /v3/config roster, badge merge, and fallback consistency',
 })
 
 describe('WorkBuddyUpstreamClient.fetchModels badge merge', () => {
-  it('reads the console document once for badges and ships without them when it fails', async () => {
+  it('merges badges from the console document and ships without them when it fails', async () => {
     const calls: string[] = []
     const configEnvelope = JSON.stringify({
       code: 0, msg: 'ok',
@@ -747,28 +747,34 @@ describe('WorkBuddyUpstreamClient.fetchModels badge merge', () => {
     })
     const consoleEnvelope = JSON.stringify({
       code: 0, msg: 'ok',
-      data: { models: [{ id: 'm-1', tags: ['badge:限时免费:#FF0000', 'not-a-badge'] }] },
+      data: {
+        // Since #201 the console document is a roster source too, so it must
+        // carry the `cli` agent; its tags are what the badge merge reads.
+        models: [{ id: 'm-1', name: 'Model One', maxInputTokens: 100_000, maxOutputTokens: 32_000, supportsReasoning: true, onlyReasoning: true, credits: 'x0.00 credits', tags: ['badge:限时免费:#FF0000', 'not-a-badge'] }],
+        agents: [{ name: 'cli', models: ['m-1'] }],
+      },
     })
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
-      calls.push(String(url instanceof Request ? url.url : url))
-      return fakeResponse(calls.length === 1 ? configEnvelope : consoleEnvelope)
+      calls.push(String(url))
+      return fakeResponse(String(url).includes('/v3/config') ? configEnvelope : consoleEnvelope)
     }))
     const models = await new WorkBuddyUpstreamClient().fetchModels(CREDENTIAL)
-    // Second request is the console badge read, against the same CN base.
-    expect(calls).toHaveLength(2)
-    expect(calls[1]).toContain('/console/enterprises/personal/models')
-    expect(calls[0]).toContain('/v3/config')
+    // Console roster read, its badge read, then the product document, then the
+    // badge read that belongs to it. All four hit the CN base.
+    expect(calls).toHaveLength(4)
+    expect(calls[0]).toContain('/v2/enterprises/personal/models')
+    expect(calls[2]).toContain('/v3/config')
     expect(models[0]?.billing).toEqual({ credits: 'x0.00 credits', badges: ['限时免费'], free: true })
 
-    // A console failure costs the badge, never the catalog.
+    // A console failure costs the badge and its roster, never the whole
+    // catalog: the product document still answers.
     calls.length = 0
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
-      calls.push(String(url instanceof Request ? url.url : url))
-      if (calls.length === 1) return fakeResponse(configEnvelope)
+      calls.push(String(url))
+      if (String(url).includes('/v3/config')) return fakeResponse(configEnvelope)
       throw new Error('console endpoint offline')
     }))
     const withoutBadges = await new WorkBuddyUpstreamClient().fetchModels(CREDENTIAL)
-    expect(calls).toHaveLength(2)
     expect(withoutBadges.map(model => model.id)).toEqual(['m-1'])
     expect(withoutBadges[0]?.billing).toEqual({ credits: 'x0.00 credits', free: true })
   })

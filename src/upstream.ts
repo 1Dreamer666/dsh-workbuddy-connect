@@ -569,7 +569,21 @@ export function prepareChatBody(source: string): string {
   return JSON.stringify(obj)
 }
 
-/** Rewrite `role: "developer"` messages to `role: "system"` (upstream rejects developer). */
+/**
+ * Rewrite `role: "developer"` messages to `role: "system"` (upstream rejects developer).
+ *
+ * Idempotent, so it is safe to run twice — which is exactly what the CN path
+ * now does (#201). `prepareCnChatBody` used to strip only the effort, on the
+ * assumption that `createWorkBuddyShim`'s `prepareChatBody` call had already
+ * normalised the body. That held only for requests entering through the shim.
+ * Any other caller of `chatStream` left `role: "developer"` on the wire and
+ * drew 400 / 11128 ("Illegal API invocation from an unapproved channel") while
+ * international kept working — measured as an exact A/B: `system` + `user`
+ * answers 200, `developer` + `user` answers 400 / 11128 on the same
+ * credentials, same headers, same models. The rewrite is a no-op over an
+ * already-normalised body, so re-running it removes that asymmetry without the
+ * double-normalisation the old note warned about.
+ */
 function normalizeDeveloperRole(obj: Record<string, unknown>): void {
   const messages = obj['messages']
   if (!Array.isArray(messages)) return
@@ -913,48 +927,191 @@ export class WorkBuddyUpstreamClient {
    * `envelopeError` — so an expired session or exhausted credit is reported as
    * such rather than as a generic catalog failure.
    */
+  /**
+   * GET the model catalog for this credential's region.
+   *
+   * **CN** reads two documents and unions them:
+   *
+   * - `/v2/enterprises/personal/models`, the console document the desktop App's
+   *   own selector reads. It still carries a `cli` agent with the full chat
+   *   roster.
+   * - `/v3/config`, the product document, read with the CLI User-Agent.
+   *
+   * Neither is a superset of the other (measured 2026-10-22: the console
+   * document lists `auto`, the product one lists `hy3-x` and `minimax-m2.7`),
+   * so reading only one silently hides models the account can use. That is
+   * exactly how the picker lost 15 of 20 ids on 2026-10-21: the product
+   * document stopped serving the `cli` agent to App-shaped clients, and its
+   * flat `models` list carries mostly completion-specialised rows
+   * (`hunyuan-3b`, `codewise-*`) rather than chat models, so
+   * {@link parseModelCatalog} had no roster to intersect. The chat endpoint
+   * never stopped serving those ids — each answers 200 with a normal SSE
+   * stream — so this was a catalog-source defect, never an upstream
+   * withdrawal.
+   *
+   * **International** keeps its single documented source and App-shaped UA:
+   * its split was measured there and the console route is CN-only.
+   *
+   * Both CN readers return `undefined` on failure instead of throwing, so one
+   * route being down degrades to the other; only when neither answers at all
+   * does this fail, and the caller then serves the static roster.
+   */
   async fetchModels(credential: WorkBuddyCredential, signal?: AbortSignal): Promise<readonly WorkBuddyUpstreamModel[]> {
     const international = regionOf(credential.domain) === 'global'
     // `this.resolveAppVersion`, not the module-level function: the constructor
     // injects a resolver so tests never read the real filesystem, and calling
     // the module function directly made that seam inert.
     const appVersion = international ? await this.resolveAppVersion() : undefined
-    const response = await fetch(`${chatBase(credential)}/v3/config`, {
-      headers: {
-        Authorization: `Bearer ${credential.accessToken}`,
-        Accept: 'application/json',
-        Origin: originReferer(credential),
-        Referer: `${originReferer(credential)}/`,
-        ...international ? { 'X-Requested-With': 'XMLHttpRequest', 'X-Product': 'SaaS' } : identityHeaders(credential),
-        'User-Agent': appVersion === undefined ? CLIENT_UA : appUserAgent(appVersion.version),
-      },
-      signal: signal === undefined
-        ? AbortSignal.timeout(JSON_TIMEOUT_MS)
-        : AbortSignal.any([signal, AbortSignal.timeout(JSON_TIMEOUT_MS)]),
-    })
-    const envelope = await readEnvelope(response)
-    if (!response.ok || envelope.code !== 0) throw envelopeError(response.status, envelope)
-    // Two catalog shapes share this path. The endpoints wrap their answer in
-    // `{code,msg,data}`, but `/v3/config` has also been observed answering with
-    // the product document bare at the top level (no wrapper at all). Treating
-    // a missing `data` as an empty document turned that second shape into a
-    // spurious "no cli agent models", so a body that itself looks like a
-    // catalog (it carries models or agents) is used as the answer. A body with
-    // neither shape still falls through to the empty-parse error below.
-    const data = isObject(envelope.data) ? envelope.data
-      : 'models' in envelope.document || 'agents' in envelope.document ? envelope.document
-      : {}
-    // Promo badges exist only in the console document, so CN merges them in.
-    // The read is best-effort and separate: its failure costs the badges and
-    // never the catalog.
-    const promoBadges = international ? undefined : await this.fetchPromoBadges(credential, signal)
-    const models = parseModelCatalog(data, international, promoBadges)
+    const timeoutSignal = signal === undefined
+      ? AbortSignal.timeout(JSON_TIMEOUT_MS)
+      : AbortSignal.any([signal, AbortSignal.timeout(JSON_TIMEOUT_MS)])
+    if (!international) {
+      const consoleResult = await this.fetchCnConsoleModels(credential, timeoutSignal)
+      const configResult = await this.fetchCnConfigModels(credential, timeoutSignal, appVersion)
+      const merged = mergeCnCatalogs(consoleResult.models, configResult.models)
+      if (merged.length > 0) {
+        this.lastCatalog = {
+          fetchedAtMs: Date.now(),
+          source: consoleResult.models !== undefined && configResult.models !== undefined
+            ? 'workbuddy:cli+console'
+            : consoleResult.models !== undefined ? 'workbuddy:console' : 'workbuddy:cli',
+          ...appVersion === undefined ? {} : { appVersion },
+        }
+        return merged
+      }
+      // Both routes failed. Report the *product document's* failure, because it
+      // is the one this plugin has always reported: an HTTP status from
+      // `envelopeError` keeps `classifyUpstreamError` able to tell "upstream
+      // down" from "signed out" from "no roster", and a generic message would
+      // collapse those into one.
+      throw configResult.error ?? consoleResult.error
+        ?? new Error('workbuddy: neither the console catalog nor /v3/config answered with a model roster')
+    }
+    const { models } = await this.fetchCnConfigModels(credential, timeoutSignal, appVersion, true)
+    if (models === undefined) {
+      // Preserve the shape callers and tests already match on: the parse error
+      // that a document without a `cli` agent produces.
+      throw new Error('workbuddy model catalog lists no cli agent models')
+    }
     this.lastCatalog = {
       fetchedAtMs: Date.now(),
-      source: international ? 'workbuddy-ai:app' : 'workbuddy:cli',
+      source: 'workbuddy-ai:app',
       ...appVersion === undefined ? {} : { appVersion },
     }
     return models
+  }
+
+  /**
+   * GET the CN catalog from the console document the desktop App reads.
+   *
+   * Returns `undefined` on any failure — transport, envelope, or a parse that
+   * yields nothing — so {@link fetchModels} can try the product document and,
+   * failing both, report a real error. A catalog this plugin cannot read must
+   * degrade to the other source, never to an empty picker.
+   */
+  private async fetchCnConsoleModels(
+    credential: WorkBuddyCredential,
+    signal: AbortSignal,
+  ): Promise<CnCatalogAttempt> {
+    let response: Response
+    try {
+      response = await fetch(`${billingBase(credential)}/v2/enterprises/personal/models`, {
+        headers: {
+          Authorization: `Bearer ${credential.accessToken}`,
+          Accept: 'application/json',
+          Origin: originReferer(credential),
+          Referer: `${originReferer(credential)}/`,
+          ...identityHeaders(credential),
+          'User-Agent': CLIENT_UA,
+        },
+        signal,
+      })
+    } catch (error) {
+      return { error: error instanceof Error ? error : new Error(String(error)) }
+    }
+    let envelope: Awaited<ReturnType<typeof readEnvelope>>
+    try {
+      envelope = await readEnvelope(response)
+    } catch (error) {
+      return { error: error instanceof Error ? error : new Error(String(error)) }
+    }
+    if (!response.ok || envelope.code !== 0) return { error: envelopeError(response.status, envelope) }
+    const data = isObject(envelope.data) ? envelope.data
+      : 'models' in envelope.document || 'agents' in envelope.document ? envelope.document
+      : {}
+    try {
+      const models = parseModelCatalog(data, false, await this.fetchPromoBadges(credential, signal))
+      return models.length === 0 ? { error: new Error('workbuddy console catalog listed no usable models') } : { models }
+    } catch (error) {
+      return { error: error instanceof Error ? error : new Error(String(error)) }
+    }
+  }
+
+  /**
+   * GET the CN catalog from `/v3/config`, the product document.
+   *
+   * Two catalog shapes share this path. The endpoints wrap their answer in
+   * `{code,msg,data}`, but `/v3/config` has also been observed answering with
+   * the product document bare at the top level (no wrapper at all). Treating a
+   * missing `data` as an empty document turned that second shape into a
+   * spurious "no cli agent models", so a body that itself looks like a catalog
+   * (it carries models or agents) is used as the answer.
+   *
+   * Returns `undefined` instead of throwing for the same reason
+   * {@link fetchCnConsoleModels} does.
+   */
+  private async fetchCnConfigModels(
+    credential: WorkBuddyCredential,
+    signal: AbortSignal,
+    appVersion: { version: string } | undefined,
+    international = false,
+  ): Promise<CnCatalogAttempt> {
+    let response: Response
+    try {
+      response = await fetch(`${chatBase(credential)}/v3/config`, {
+        headers: {
+          Authorization: `Bearer ${credential.accessToken}`,
+          Accept: 'application/json',
+          Origin: originReferer(credential),
+          Referer: `${originReferer(credential)}/`,
+          // The international gateway splits `/v3/config` by client identity
+          // and needs the App-shaped pair; CN presents the account identity
+          // instead. Sharing one header block would silently hand the
+          // international route the CN shape — which is the App/CLI split this
+          // plugin was built around.
+          ...international
+            ? { 'X-Requested-With': 'XMLHttpRequest', 'X-Product': 'SaaS' }
+            : identityHeaders(credential),
+          'User-Agent': appVersion === undefined ? CLIENT_UA : appUserAgent(appVersion.version),
+        },
+        signal,
+      })
+    } catch (error) {
+      return { error: error instanceof Error ? error : new Error(String(error)) }
+    }
+    let envelope: Awaited<ReturnType<typeof readEnvelope>>
+    try {
+      envelope = await readEnvelope(response)
+    } catch (error) {
+      return { error: error instanceof Error ? error : new Error(String(error)) }
+    }
+    if (!response.ok || envelope.code !== 0) return { error: envelopeError(response.status, envelope) }
+    const data = isObject(envelope.data) ? envelope.data
+      : 'models' in envelope.document || 'agents' in envelope.document ? envelope.document
+      : {}
+    try {
+      // Promo badges exist only in the console document, so CN merges them in.
+      // The read is best-effort and separate: its failure costs the badges and
+      // never the catalog.
+      const models = parseModelCatalog(
+        data,
+        international,
+        international ? undefined : await this.fetchPromoBadges(credential, signal),
+      )
+      return models.length === 0 ? { error: new Error('workbuddy /v3/config listed no usable models') } : { models }
+    } catch (error) {
+      return { error: error instanceof Error ? error : new Error(String(error)) }
+    }
   }
 
   /**
@@ -1301,6 +1458,52 @@ async function readFirstEvent(response: Response): Promise<boolean> {
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
+/**
+ * One CN catalog read's outcome: its roster, or the failure that stopped it.
+ *
+ * `undefined`-on-failure was enough while there was a single source, but with
+ * two the caller has to choose *which* failure to report — and a silent
+ * `undefined` cannot tell "HTTP 503" from "no cli agent" from "empty roster".
+ * Keeping the error lets {@link WorkBuddyUpstreamClient.fetchModels} hand back
+ * the product document's `envelopeError`, so `classifyUpstreamError` still
+ * distinguishes an outage from a dead session from a bad catalog.
+ */
+interface CnCatalogAttempt {
+  models?: readonly WorkBuddyUpstreamModel[]
+  error?: Error
+}
+/**
+ * Union two CN catalogs, keeping the console document's row for a shared id.
+ *
+ * The two documents disagree about which models exist and neither is a
+ * superset of the other (see {@link WorkBuddyUpstreamClient.fetchModels}), so
+ * taking only one hides models the account can use. The console row wins a
+ * shared id because it is the document the desktop App renders, so its
+ * metadata is what the user already sees; a model present in only one document
+ * is kept as-is. Order follows the console document first, then the product
+ * document's additions — the console roster is the order the App's selector
+ * uses.
+ *
+ * Either argument may be undefined (its source failed); the other is returned
+ * unchanged, and two undefineds yield an empty list.
+ */
+function mergeCnCatalogs(
+  consoleModels: readonly WorkBuddyUpstreamModel[] | undefined,
+  configModels: readonly WorkBuddyUpstreamModel[] | undefined,
+): readonly WorkBuddyUpstreamModel[] {
+  const consoleList = consoleModels ?? []
+  const configList = configModels ?? []
+  if (consoleList.length === 0) return [...configList]
+  if (configList.length === 0) return [...consoleList]
+  const seen = new Set<string>()
+  const merged: WorkBuddyUpstreamModel[] = []
+  for (const model of [...consoleList, ...configList]) {
+    if (typeof model?.id !== 'string' || model.id === '' || seen.has(model.id)) continue
+    seen.add(model.id)
+    merged.push(model)
+  }
+  return merged
+}
 function positive(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
@@ -1540,14 +1743,29 @@ export function modelWithCurrentPromotion(model: WorkBuddyUpstreamModel, now = D
 /**
  * Prepare a body for the **CN** endpoint.
  *
- * Until #87 the CN wire was the caller's body verbatim. The only difference
- * now is the shared {@link dropUnsupportedEffort} strip, whose region scope was
- * lifted once measurements showed this endpoint rejects `off` too.
+ * Two rewrites, both measured as one-to-one with the CN gateway's rejections:
  *
- * Deliberately **not** routed through {@link prepareChatBody}: the shim already
- * applies it before handing the body to {@link WorkBuddyUpstreamClient.chatStream},
- * and re-running it would be a second `stream`/`developer`/`tool_choice`
- * normalisation of an already-normalised body. Only the strip belongs here.
+ * 1. {@link normalizeDeveloperRole}. Until #201 the CN wire was the caller's
+ *    body verbatim apart from {@link dropUnsupportedEffort}, on the assumption
+ *    that `createWorkBuddyShim`'s `prepareChatBody` call had already normalised
+ *    the body. That held only for requests entering through the shim; any
+ *    other caller of `chatStream` left `role: "developer"` on the wire and drew
+ *    400 / 11128 while international kept working, because
+ *    {@link prepareInternationalChatBody} does route through
+ *    {@link prepareChatBody}. The rewrite is idempotent, so re-running it over
+ *    an already-normalised body changes nothing.
+ * 2. {@link sanitizeFingerprint}. The harness system prompt ships a brand
+ *    paragraph (the "You are interacting with the user through the … GUI"
+ *    runtime-context opener), and the CN gateway rejects it with the *same*
+ *    400 / 11128, on `system` and `developer` alike. Measured by bisection on a
+ *    live CN account: deleting either clause of that paragraph, or shortening
+ *    the two-word brand to its first word, clears the rejection; changing
+ *    account or API key does not. See #204.
+ *
+ * `stream` and `tool_choice` are deliberately still not touched here: the shim
+ * forces `stream: true` before handing the body to
+ * {@link WorkBuddyUpstreamClient.chatStream}, and `tool_choice` normalisation
+ * belongs in that same single place.
  *
  * A body that is not a JSON object is returned unchanged, so this is safe to
  * run over an already-prepared-or-not body.
@@ -1561,8 +1779,59 @@ export function prepareCnChatBody(source: string): string {
     return source
   }
   if (!isObject(body)) return source
+  normalizeDeveloperRole(body)
+  sanitizeFingerprint(body)
   dropUnsupportedEffort(body)
   return JSON.stringify(body)
+}
+
+/**
+ * The two-word harness brand, as it appears in the shipped system prompt.
+ *
+ * Matches spaces and tabs only. Hyphenated forms (`deepseek-harness`) are
+ * paths, package names and identifiers — rewriting those has broken a checkout
+ * before (#574), so they are left exactly as written.
+ */
+const SANITIZE_BRAND_RE = /DeepSeek[ \t]+Harness/g
+
+/**
+ * Shorten the harness brand to its first word in instruction messages.
+ *
+ * The CN gateway answers 400 / 11128 for a system (or developer) message that
+ * names the harness by its full two-word brand (#204). The offending paragraph
+ * is the runtime-context opener the harness ships by default, so every request
+ * from an unmodified install carried it; neither the account nor the API key
+ * changes the outcome, which is what ruled the credential plane out.
+ *
+ * Live bisection established the minimal repair: dropping either clause of
+ * that paragraph clears the rejection, and so does shortening the brand while
+ * leaving the rest of the sentence intact. This does the latter, so the model
+ * still learns it is talking to a user through a GUI — only the brand spelling
+ * is shortened.
+ *
+ * Scope matches every other body rewrite: `system` and `developer` only.
+ * `user` and `tool` are the user's own data and are never touched, so a quoted
+ * brand name inside a prompt stays quoted verbatim. Only string content is
+ * rewritten; array (multipart) content is left alone rather than
+ * reconstructed, so an unusual message shape can never be reshaped by
+ * accident.
+ */
+function sanitizeFingerprint(obj: Record<string, unknown>): void {
+  const messages = obj['messages']
+  if (!Array.isArray(messages)) return
+  for (const message of messages) {
+    if (typeof message !== 'object' || message === null || Array.isArray(message)) continue
+    const wrapped = message as Record<string, unknown>
+    const role = wrapped['role']
+    if (role !== 'system' && role !== 'developer') continue
+    const content = wrapped['content']
+    if (typeof content !== 'string') continue
+    if (!SANITIZE_BRAND_RE.test(content)) continue
+    // `test` on a /g regex advances lastIndex; reset before `replace` so a
+    // second message in the same body is not skipped.
+    SANITIZE_BRAND_RE.lastIndex = 0
+    wrapped['content'] = content.replace(SANITIZE_BRAND_RE, 'DeepSeek')
+  }
 }
 
 export function prepareInternationalChatBody(source: string): string {

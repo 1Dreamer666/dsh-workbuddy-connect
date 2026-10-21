@@ -2,6 +2,9 @@
 
 [English](./README.en.md) | 中文
 
+> **维护状态**：原仓库 `corrinehu/dsh-workbuddy-connect` 已不可用，本仓库自 **0.8.0** 起接续维护，保留完整提交历史与全部贡献者署名。
+> 维护者：[@Venshell](https://github.com/Venshell) ｜ 原作者：[@corrinehu](https://github.com/corrinehu) ｜ 完整名单见 [AUTHORS.md](./AUTHORS.md)
+
 将已登录的 WorkBuddy / WorkBuddy AI 桌面应用中可用的模型接入 DeepSeek Harness；两版分别显示各自的模型分组，并沿用各自的账号登录与积分。
 
 ## 安装
@@ -11,7 +14,7 @@
 **推荐：把安装交给本机已有的 Agent**——任何具备终端与文件操作能力的助手（DSH Agent、Codex、Claude Code、Cursor 等）都可以，把下面这段话原样发给它：
 
 ```text
-请帮我安装并验证 DSH（DeepSeek Harness）插件 dsh-workbuddy-connect（项目地址：https://github.com/corrinehu/dsh-workbuddy-connect）：
+请帮我安装并验证 DSH（DeepSeek Harness）插件 dsh-workbuddy-connect（项目地址：https://github.com/Venshell/dsh-workbuddy-connect）：
 先阅读项目 README，确认我实际使用的界面（Web / Desktop / TUI）与 DSH 内核版本，桌面版以 App 内置核心为准，不要用独立 CLI 的版本代替；
 再按版本对应关系从 npm 正式包安装（0.2.1-rc.2→0.7.9、0.2.1-rc.1→0.7.7、0.2.0-rc.2→0.7.6、rc.1→0.7.0、0.1.5–0.1.7→0.6.5），优先走本机受支持的非插件市场渠道；部分 Desktop 发行版（尤其官方 Electron 版）的 profile 由 App 管理，各发行版规则未必相同，先确认我所用的发行版，再探查其合规的安装方式，但不得绕过其校验；
 任何本地文件或配置改动，先征得我同意并做好备份；
@@ -155,8 +158,9 @@ llm-workbuddy:
 | `0.1.2-rc.1` | `0.3.1` | 更早旧线，仅历史维护。 |
 | `0.1.1-rc.2` | `0.2.6` | 更早旧线，仅历史维护。 |
 
-历次更新（完整记录见 [releases](https://github.com/corrinehu/dsh-workbuddy-connect/releases)）：
+历次更新（完整记录见 [releases](https://github.com/Venshell/dsh-workbuddy-connect/releases)）：
 
+- **0.8.0**：修复国内版三处导致「请求被拦截」或模型消失的问题。① `prepareCnChatBody` 补齐 `developer` → `system` 改写（#201）：国内端点对 `role: "developer"` 返回 400 / `11128`，而原来的实现依赖 shim 先规范化，任何绕过 shim 的调用都会泄漏；该改写是幂等的，对已规范化的 body 为 no-op。② 新增品牌指纹清洗（#204）：system / developer 消息中出现完整品牌词同样触发 `11128`，现仅把品牌缩短，句子其余内容逐字保留；只匹配空格与制表符，`deepseek-harness` 这类路径与包名不受影响，user / tool 内容永不改写。③ 国内模型目录改为双源并集：console 文档 `/v2/enterprises/personal/models`（桌面 App 选择器同源，仍带 `cli` agent）与 `/v3/config`。两源互不为超集，取并集可避免任一侧变动导致模型整批消失；单侧失败自动降级到另一侧。此前 `/v3/config` 对 App 形态 UA 不再返回 `cli` agent，选择器因此丢失 20 个 id 中的 15 个，而这些模型在 chat 端点其实仍照常可用。
 - **0.7.9**：恢复 DSH 0.2.1-rc.2 上国际版最大上下文窗口开关，修复延迟初始化及设置持久化（PR [#172](https://github.com/corrinehu/dsh-workbuddy-connect/pull/172)，by @1Dreamer666）；避免本地服务绑定到 fetch 禁用端口导致国际版 502（PR [#164](https://github.com/corrinehu/dsh-workbuddy-connect/pull/164)，by @Xiong-Ziyi）；同名积分包合并展示，减少重复条目。
 - **0.7.8**：适配 DSH 0.2.1-rc.2；将官方原子写入工具打包到插件，避免依赖宿主暴露该模块；更新国内模型目录快照，区分 Hy3 / Hy3-X；优化推理检测结果展示，调整积分刷新按钮位置并修正悬停提示。感谢 @chenpiyanghappy 的 PR [#156](https://github.com/corrinehu/dsh-workbuddy-connect/pull/156)。
 - **0.7.7**：适配 DSH 0.2.1-rc.1 内核：peer 收窄到 0.2.1-rc.1，插件自带的 `@earendil-works/pi-ai` 随内核升级到 1.3.0（profile 级历史遗留的 0.87.1 overrides 必须移除，否则插件无法加载）；修复国际版与国内版推理档位检测停留「检测未完成」——上游把档位拒绝码改拼为 `invalid_parameter_value`（[#143](https://github.com/corrinehu/dsh-workbuddy-connect/issues/143) / [#148](https://github.com/corrinehu/dsh-workbuddy-connect/issues/148)，PR [#145](https://github.com/corrinehu/dsh-workbuddy-connect/pull/145)）；修复中文 Windows 控制台下注册表缺键诊断因 GBK 编码被误判（zh-CN 实机验证）。

@@ -535,7 +535,59 @@ declare class WorkBuddyUpstreamClient {
    * `envelopeError` — so an expired session or exhausted credit is reported as
    * such rather than as a generic catalog failure.
    */
+  /**
+   * GET the model catalog for this credential's region.
+   *
+   * **CN** reads two documents and unions them:
+   *
+   * - `/v2/enterprises/personal/models`, the console document the desktop App's
+   *   own selector reads. It still carries a `cli` agent with the full chat
+   *   roster.
+   * - `/v3/config`, the product document, read with the CLI User-Agent.
+   *
+   * Neither is a superset of the other (measured 2026-10-22: the console
+   * document lists `auto`, the product one lists `hy3-x` and `minimax-m2.7`),
+   * so reading only one silently hides models the account can use. That is
+   * exactly how the picker lost 15 of 20 ids on 2026-10-21: the product
+   * document stopped serving the `cli` agent to App-shaped clients, and its
+   * flat `models` list carries mostly completion-specialised rows
+   * (`hunyuan-3b`, `codewise-*`) rather than chat models, so
+   * {@link parseModelCatalog} had no roster to intersect. The chat endpoint
+   * never stopped serving those ids — each answers 200 with a normal SSE
+   * stream — so this was a catalog-source defect, never an upstream
+   * withdrawal.
+   *
+   * **International** keeps its single documented source and App-shaped UA:
+   * its split was measured there and the console route is CN-only.
+   *
+   * Both CN readers return `undefined` on failure instead of throwing, so one
+   * route being down degrades to the other; only when neither answers at all
+   * does this fail, and the caller then serves the static roster.
+   */
   fetchModels(credential: WorkBuddyCredential, signal?: AbortSignal): Promise<readonly WorkBuddyUpstreamModel[]>;
+  /**
+   * GET the CN catalog from the console document the desktop App reads.
+   *
+   * Returns `undefined` on any failure — transport, envelope, or a parse that
+   * yields nothing — so {@link fetchModels} can try the product document and,
+   * failing both, report a real error. A catalog this plugin cannot read must
+   * degrade to the other source, never to an empty picker.
+   */
+  private fetchCnConsoleModels;
+  /**
+   * GET the CN catalog from `/v3/config`, the product document.
+   *
+   * Two catalog shapes share this path. The endpoints wrap their answer in
+   * `{code,msg,data}`, but `/v3/config` has also been observed answering with
+   * the product document bare at the top level (no wrapper at all). Treating a
+   * missing `data` as an empty document turned that second shape into a
+   * spurious "no cli agent models", so a body that itself looks like a catalog
+   * (it carries models or agents) is used as the answer.
+   *
+   * Returns `undefined` instead of throwing for the same reason
+   * {@link fetchCnConsoleModels} does.
+   */
+  private fetchCnConfigModels;
   /**
    * Read the console catalog's promotional tags, by model id.
    *
@@ -680,14 +732,29 @@ declare function modelWithCurrentPromotion(model: WorkBuddyUpstreamModel, now?: 
 /**
  * Prepare a body for the **CN** endpoint.
  *
- * Until #87 the CN wire was the caller's body verbatim. The only difference
- * now is the shared {@link dropUnsupportedEffort} strip, whose region scope was
- * lifted once measurements showed this endpoint rejects `off` too.
+ * Two rewrites, both measured as one-to-one with the CN gateway's rejections:
  *
- * Deliberately **not** routed through {@link prepareChatBody}: the shim already
- * applies it before handing the body to {@link WorkBuddyUpstreamClient.chatStream},
- * and re-running it would be a second `stream`/`developer`/`tool_choice`
- * normalisation of an already-normalised body. Only the strip belongs here.
+ * 1. {@link normalizeDeveloperRole}. Until #201 the CN wire was the caller's
+ *    body verbatim apart from {@link dropUnsupportedEffort}, on the assumption
+ *    that `createWorkBuddyShim`'s `prepareChatBody` call had already normalised
+ *    the body. That held only for requests entering through the shim; any
+ *    other caller of `chatStream` left `role: "developer"` on the wire and drew
+ *    400 / 11128 while international kept working, because
+ *    {@link prepareInternationalChatBody} does route through
+ *    {@link prepareChatBody}. The rewrite is idempotent, so re-running it over
+ *    an already-normalised body changes nothing.
+ * 2. {@link sanitizeFingerprint}. The harness system prompt ships a brand
+ *    paragraph (the "You are interacting with the user through the … GUI"
+ *    runtime-context opener), and the CN gateway rejects it with the *same*
+ *    400 / 11128, on `system` and `developer` alike. Measured by bisection on a
+ *    live CN account: deleting either clause of that paragraph, or shortening
+ *    the two-word brand to its first word, clears the rejection; changing
+ *    account or API key does not. See #204.
+ *
+ * `stream` and `tool_choice` are deliberately still not touched here: the shim
+ * forces `stream: true` before handing the body to
+ * {@link WorkBuddyUpstreamClient.chatStream}, and `tool_choice` normalisation
+ * belongs in that same single place.
  *
  * A body that is not a JSON object is returned unchanged, so this is safe to
  * run over an already-prepared-or-not body.

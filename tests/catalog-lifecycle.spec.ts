@@ -150,10 +150,19 @@ describe('catalog lifecycle', () => {
     vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
 
     let attempts = 0
-    vi.stubGlobal('fetch', vi.fn(async () => {
-      attempts += 1
-      // Fail the first attempt only: the retry must recover on its own.
-      return attempts === 1
+    // Since #201 a CN refresh reads two documents and unions them, so it only
+    // fails when *both* fail. Key the failure on the console roster read (the
+    // first request of each refresh) and fail the product document too on that
+    // refresh; a single failing route would now degrade rather than fail.
+    let failing = true
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      const target = String(url)
+      if (target.includes('/personal/models') && !target.includes('/console/')) {
+        attempts += 1
+        // Fail the first refresh only: the retry must recover on its own.
+        failing = attempts === 1
+      }
+      return failing
         ? fakeResponse('upstream down', false, 503)
         : fakeResponse(catalogEnvelope('recovered-model', 'Recovered'))
     }))
