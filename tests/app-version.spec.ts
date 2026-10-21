@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -137,19 +137,21 @@ describe('resolveAppVersion', () => {
   it('still answers when the cache cannot be written', async () => {
     // A read-only home must not take the catalog down with it.
     //
-    // The path is a *real* unwritable directory rather than a hard-coded
-    // `/proc/...`: `/proc` is Linux-only, and on the ubuntu runner a write
-    // under it does not fail promptly enough to stay inside the test budget,
-    // which made this the one spec to fail there while passing on Windows and
-    // macOS. A chmod-ed temp directory fails identically on every platform.
-    const home = await mkdtemp(join(tmpdir(), 'wb-readonly-'))
-    CLEANUP.push(() => removeTempDir(home, { unprotect: true }))
-    const dir = join(home, 'locked')
-    await mkdir(dir)
-    await chmod(dir, 0o500)
+    // Two earlier spellings of this fixture were wrong in ways only CI exposed:
+    // a hard-coded `/proc/...` path is Linux-only and does not fail promptly
+    // there, and a chmod-ed directory proves nothing on the runner because it
+    // runs as root, where the mode bits do not deny the write. Making the cache
+    // *path itself a directory* fails for every user on every platform — the
+    // atomic writer cannot rename a file over a non-empty directory — so the
+    // best-effort catch is exercised deterministically.
+    const home = await mkdtemp(join(tmpdir(), 'wb-unwritable-'))
+    CLEANUP.push(() => removeTempDir(home))
+    const blocker = join(home, 'version.json')
+    await mkdir(blocker)
+    await writeFile(join(blocker, 'occupied'), 'x')
     await expect(resolveAppVersion({
       installed: async () => ({ version: '5.5.2', bundle: '/x' }),
-      path: join(dir, 'version.json'),
+      path: blocker,
     })).resolves.toMatchObject({ version: '5.5.2', source: 'installed' })
   })
 

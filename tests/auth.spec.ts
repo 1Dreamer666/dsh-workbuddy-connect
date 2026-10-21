@@ -343,12 +343,20 @@ describe('WSL default desktop path probing', () => {
     // replaces the `/home/alice` this helper promises. That is what made this
     // case pass locally and resolve to `/home/runner` on CI.
     const savedEnv = Object.fromEntries(
-      ['APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'WSL_DISTRO_NAME', 'WSL_INTEROP', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME']
+      ['APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'WSL_DISTRO_NAME', 'WSL_INTEROP', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'HOME']
         .map(name => [name, process.env[name]]),
     )
     Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
     fakeOs.home = options.home
     fakeOs.release = '6.6.87.2-microsoft-standard-WSL2'
+    // `HOME` is set alongside the `os.homedir()` mock rather than instead of it.
+    // `auth.ts` reads `homedir()`, which the module mock covers, but anything
+    // that reaches the real `node:os` in the same worker — a module that loaded
+    // before `vi.mock` hoisted, or an ESM namespace copy — reads `HOME` on
+    // Linux. Pinning both makes the helper's promise independent of load order,
+    // which is why this case resolved to `/home/runner` on CI while passing on
+    // a machine where `HOME` happened to be unset.
+    process.env['HOME'] = options.home
     delete process.env['APPDATA']
     delete process.env['LOCALAPPDATA']
     delete process.env['USERPROFILE']
@@ -376,12 +384,17 @@ async function asLinux<T>(options: {
   env?: Record<string, string>
 }, run: () => Promise<T>): Promise<T> {
   const savedPlatform = process.platform
-  const managed = ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'WSL_DISTRO_NAME', 'WSL_INTEROP']
+  // `HOME` rides along with the managed vars for the same reason as in
+  // `asWsl`: it is what the real `node:os` reads on Linux, so leaving the
+  // runner's value in place makes the injected home a suggestion rather than a
+  // guarantee.
+  const managed = ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'WSL_DISTRO_NAME', 'WSL_INTEROP', 'HOME']
   const savedEnv = Object.fromEntries(managed.map(name => [name, process.env[name]]))
   Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
   fakeOs.home = options.home
   fakeOs.release = '6.12.0-generic'
   for (const name of managed) delete process.env[name]
+  process.env['HOME'] = options.home
   Object.assign(process.env, options.env)
   try {
     return await run()
