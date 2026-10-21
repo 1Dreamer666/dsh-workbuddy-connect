@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir as osHomedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -411,6 +411,15 @@ async function asLinux<T>(options: {
 
   it('probes the matching mounted Windows profile before the Linux paths', async () => {
     await asWsl({ home: '/home/alice' }, async () => {
+      // Assert the environment the helper promised before asserting on what the
+      // production code did with it. `xdgBase` prefers a non-empty absolute
+      // `XDG_CONFIG_HOME` over the injected home, so an override surviving into
+      // this callback turns the third entry into the *runner's* home — which is
+      // exactly how this case failed on CI while passing locally. Failing here
+      // names that cause instead of surfacing as a mysterious path diff.
+      expect(process.env['XDG_CONFIG_HOME']).toBeUndefined()
+      expect(process.env['XDG_DATA_HOME']).toBeUndefined()
+      expect(osHomedir()).toBe('/home/alice')
       expect(defaultDesktopAuthCandidates()).toEqual([
         join('/mnt/c/Users/alice/AppData/Local', AUTH_TAIL),
         join('/mnt/c/Users/alice/AppData/Roaming', AUTH_TAIL),

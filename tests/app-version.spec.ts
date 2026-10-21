@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -137,21 +137,20 @@ describe('resolveAppVersion', () => {
   it('still answers when the cache cannot be written', async () => {
     // A read-only home must not take the catalog down with it.
     //
-    // Two earlier spellings of this fixture were wrong in ways only CI exposed:
-    // a hard-coded `/proc/...` path is Linux-only and does not fail promptly
-    // there, and a chmod-ed directory proves nothing on the runner because it
-    // runs as root, where the mode bits do not deny the write. Making the cache
-    // *path itself a directory* fails for every user on every platform — the
-    // atomic writer cannot rename a file over a non-empty directory — so the
-    // best-effort catch is exercised deterministically.
+    // Three earlier spellings of this fixture were wrong in ways only CI
+    // exposed. A hard-coded `/proc/...` path is Linux-only and does not fail
+    // promptly there. A chmod-ed directory proves nothing on the runner, which
+    // runs as root. Making the path itself a directory reaches the atomic
+    // writer's lock branch, where the runner consumed the entire 5s budget.
+    //
+    // A missing parent directory is the one shape that fails immediately and
+    // identically for any user: creating the parent is the writer's first step,
+    // so it never reaches the lock, the rename, or a retry loop.
     const home = await mkdtemp(join(tmpdir(), 'wb-unwritable-'))
     CLEANUP.push(() => removeTempDir(home))
-    const blocker = join(home, 'version.json')
-    await mkdir(blocker)
-    await writeFile(join(blocker, 'occupied'), 'x')
     await expect(resolveAppVersion({
       installed: async () => ({ version: '5.5.2', bundle: '/x' }),
-      path: blocker,
+      path: join(home, 'absent-parent', 'version.json'),
     })).resolves.toMatchObject({ version: '5.5.2', source: 'installed' })
   })
 
