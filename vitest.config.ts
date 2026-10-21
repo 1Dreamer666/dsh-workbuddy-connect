@@ -22,5 +22,20 @@ export default defineConfig({
     hookTimeout: 60_000,
     // `verbose` so a timeout names the file and test that held the runner.
     reporters: process.env.CI === 'true' ? ['verbose'] : ['default'],
+    // A test that leaves an interval or a socket open keeps the worker's event
+    // loop alive; vitest then waits on it rather than exiting. Locally the
+    // process is fast enough to win the race, on the ubuntu runner it is not —
+    // the run sat for 12 minutes after the last assertion, with no file ever
+    // reported. `teardownTimeout` bounds that wait, and `pool: 'forks'` gives
+    // each file a real child process vitest can kill outright instead of a
+    // thread it can only ask to stop.
+    teardownTimeout: 10_000,
+    pool: 'forks',
+    // One file at a time on CI: the Windows registry integration test spawns
+    // PowerShell 5.1 subprocesses, and under a concurrent run their startup
+    // budget measures runner contention rather than the step. Serialising
+    // also makes a hang attributable to a single file in the log.
+    fileParallelism: process.env.CI !== 'true',
+    ...process.env.CI === 'true' ? { maxWorkers: 2, minWorkers: 1 } : {},
   },
 })

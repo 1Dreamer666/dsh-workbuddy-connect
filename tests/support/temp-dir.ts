@@ -16,7 +16,7 @@
  * permission problem (e.g. a directory owned by another user) still throws, so
  * a real fixture bug is not masked as a flake.
  */
-import { rm } from 'node:fs/promises'
+import { chmod, rm } from 'node:fs/promises'
 
 /** Codes that mean "the filesystem is not ready yet", not "this will never work". */
 const TRANSIENT_CODES = new Set(['EPERM', 'EBUSY', 'ENOTEMPTY', 'EACCES'])
@@ -25,13 +25,33 @@ const TRANSIENT_CODES = new Set(['EPERM', 'EBUSY', 'ENOTEMPTY', 'EACCES'])
 const DEFAULT_ATTEMPTS = 20
 const DEFAULT_DELAY_MS = 25
 
+export interface RemoveTempDirOptions {
+  /**
+   * Restore owner rwx on `path` before removing it.
+   *
+   * A test that makes a directory read-only to prove the production code
+   * survives an unwritable home cannot clean up after itself otherwise —
+   * `rm -rf` needs write permission on the parent, and on POSIX the chmod
+   * sticks for the test process. Windows ignores the mode bits, so this is a
+   * no-op there.
+   */
+  unprotect?: boolean
+  attempts?: number
+}
+
 /**
  * Remove `path` recursively, retrying transient Windows filesystem errors.
  *
  * @param path - the directory to remove.
- * @param attempts - total attempts before rethrowing; defaults to 20 (~0.5s).
+ * @param options - see {@link RemoveTempDirOptions}.
  */
-export async function removeTempDir(path: string, attempts = DEFAULT_ATTEMPTS): Promise<void> {
+export async function removeTempDir(path: string, options: RemoveTempDirOptions = {}): Promise<void> {
+  const attempts = options.attempts ?? DEFAULT_ATTEMPTS
+  if (options.unprotect === true) {
+    // Best effort: the directory may already be missing, or never have been
+    // created if the test threw before mkdir.
+    await chmod(path, 0o700).catch(() => {})
+  }
   for (let attempt = 0; ; attempt += 1) {
     try {
       await rm(path, { recursive: true, force: true })
