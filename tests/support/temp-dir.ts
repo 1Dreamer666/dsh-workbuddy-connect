@@ -22,7 +22,7 @@ import { rm } from 'node:fs/promises'
 const TRANSIENT_CODES = new Set(['EPERM', 'EBUSY', 'ENOTEMPTY', 'EACCES'])
 
 /** How long to keep retrying before letting the original error through. */
-const DEFAULT_ATTEMPTS = 20
+const DEFAULT_ATTEMPTS = 60
 const DEFAULT_DELAY_MS = 25
 
 export interface RemoveTempDirOptions {

@@ -36,11 +36,15 @@ let context: Context | undefined
 afterEach(async () => {
   await context?.fiber.dispose()
   context = undefined
+  // The host writes its heartbeat file from a deferred task, so the handle can
+  // outlive `dispose()` for a tick. Yielding here lets that write land before
+  // the cleanup starts, instead of racing it on the Windows runner where the
+  // unlink of an open file is EPERM.
+  await new Promise(resolve => setTimeout(resolve, 0))
   for (const dispose of CLEANUP.splice(0)) await dispose()
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
 })
-
 async function tempDir(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'wb-lifecycle-'))
   CLEANUP.push(() => removeTempDir(root))
