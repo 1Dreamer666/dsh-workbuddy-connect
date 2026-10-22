@@ -36,14 +36,19 @@
 <summary>手动安装（命令行，仅 Web / TUI）</summary>
 
 ```sh
-# Web（按实际内核固定版本，示例为 0.2.1-rc.2 → 0.7.9；也可用 github:corrinehu/dsh-workbuddy-connect 从源码安装）
-dsh plugin --profile web add dsh-workbuddy-connect@0.7.9
+# Web（按实际内核固定版本，示例为 0.2.1-rc.2 → 0.8.0；也可用 github:Venshell/dsh-workbuddy-connect 从源码安装）
+dsh plugin --profile web add @venshell/dsh-workbuddy-connect@0.8.0
 dsh web
 
 # TUI（示例为 0.1.x 内核；该 profile 需用 pnpm 11 安装，如 npx pnpm@11）
 dsh plugin --profile dsh-tui add dsh-workbuddy-connect@0.6.5
 dsh --profile dsh-tui
 ```
+
+> **包名说明**：0.8.0 起本仓库以 `@venshell/dsh-workbuddy-connect` 发布。原包名
+> `dsh-workbuddy-connect` 的所有版本已被原作者标记弃用（停止维护），且其发布权限
+> 不在本仓库维护者手中。**0.7.9 及更早**仍用旧包名，两者可共存于不同 profile，
+> 但不要在同一 profile 中同时安装。
 
 </details>
 
@@ -173,7 +178,7 @@ llm-workbuddy:
 - **0.7.0**：适配 DSH 0.2.0 的设置服务改造，不再支持 0.1.x。
 - **0.6.5**：0.1.x 线最终版本。
 
-固定版本安装示例：`dsh plugin --profile web add dsh-workbuddy-connect@0.7.9`。
+固定版本安装示例：`dsh plugin --profile web add @venshell/dsh-workbuddy-connect@0.8.0`（0.7.9 及更早用旧包名 `dsh-workbuddy-connect`）。
 
 **pi-ai 版本按内核线区分，不能混**：0.2.1-rc.1 / rc.2 内核线（分别对应插件 0.7.7 / 0.7.8–0.7.9）已升级到 `@earendil-works/pi-ai` 1.3.0（由插件自带），profile 级历史遗留的 `overrides: {'@earendil-works/pi-ai': '0.87.1'}` **必须移除**，否则插件会因加载到旧一代 pi-ai 而启动失败；0.2.0-rc.2 内核线（插件 0.7.6）仍要求 `^0.87.1`，在这条线上**不要**把 profile 级的 pi-ai 升到 1.x，第三方插件管理器的「可更新」提示不校验 peer 约束、不能照做（[#86](https://github.com/corrinehu/dsh-workbuddy-connect/issues/86)）。
 

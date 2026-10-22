@@ -39,14 +39,21 @@ Core-to-plugin quick reference (full table in "Compatibility and release history
 <summary>Manual install (command line, Web / TUI only)</summary>
 
 ```sh
-# Web (pin per your actual core — example: 0.2.1-rc.2 -> 0.7.9; or install from source via github:corrinehu/dsh-workbuddy-connect)
-dsh plugin --profile web add dsh-workbuddy-connect@0.7.9
+# Web (pin per your actual core — example: 0.2.1-rc.2 -> 0.8.0; or install from source via github:Venshell/dsh-workbuddy-connect)
+dsh plugin --profile web add @venshell/dsh-workbuddy-connect@0.8.0
 dsh web
 
 # TUI (example for a 0.1.x core; that profile needs pnpm 11, e.g. npx pnpm@11)
 dsh plugin --profile dsh-tui add dsh-workbuddy-connect@0.6.5
 dsh --profile dsh-tui
 ```
+
+> **Package name**: from 0.8.0 this repository publishes as
+> `@venshell/dsh-workbuddy-connect`. Every version of the original name
+> `dsh-workbuddy-connect` is deprecated by its author (project discontinued),
+> and publishing rights for it are not held by this fork's maintainer.
+> **0.7.9 and earlier** keep the old name; the two can coexist in different
+> profiles, but do not install both into one profile.
 
 </details>
 
@@ -174,7 +181,7 @@ Release history (full records at [releases](https://github.com/Venshell/dsh-work
 - **0.7.0**: adapts to DSH 0.2.0's settings-service rework and drops 0.1.x support.
 - **0.6.5**: final release of the 0.1.x line.
 
-Pinned-version install example: `dsh plugin --profile web add dsh-workbuddy-connect@0.7.9`.
+Pinned-version install example: `dsh plugin --profile web add @venshell/dsh-workbuddy-connect@0.8.0` (0.7.9 and earlier use the old name, `dsh-workbuddy-connect`).
 
 **pi-ai versions are per core line and must not be mixed**: the 0.2.1-rc.1 / rc.2 core lines (plugin 0.7.7 / 0.7.8–0.7.9 respectively) moved to `@earendil-works/pi-ai` 1.3.0 (bundled by the plugin), so a profile-level leftover `overrides: {'@earendil-works/pi-ai': '0.87.1'}` **must be removed** or the plugin fails to load; the 0.2.0-rc.2 core line (plugin 0.7.6) still requires `^0.87.1` — on that line, **do not** upgrade the profile-level pi-ai to 1.x, and do not act on third-party plugin managers' "updatable" prompts, which do not check peer constraints ([#86](https://github.com/corrinehu/dsh-workbuddy-connect/issues/86)).
 

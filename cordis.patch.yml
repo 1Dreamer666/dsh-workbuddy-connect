@@ -3,4 +3,6 @@
 # separate OAuth flow is started.
 - insert:
     - id: llm-workbuddy
-      name: dsh-workbuddy-connect
+      # Must match package.json's `name`: the loader resolves this specifier, and
+      # a mismatch fails the whole profile at startup.
+      name: '@venshell/dsh-workbuddy-connect'

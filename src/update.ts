@@ -15,9 +15,13 @@
  * @module dsh-workbuddy-connect/update
  */
 
-export const WORKBUDDY_REPOSITORY_URL = 'https://github.com/corrinehu/dsh-workbuddy-connect'
-export const WORKBUDDY_UPDATE_PACKAGE_NAME = 'dsh-workbuddy-connect'
-export const WORKBUDDY_UPDATE_NPM_METADATA_URL = `https://registry.npmjs.org/-/package/${WORKBUDDY_UPDATE_PACKAGE_NAME}/dist-tags`
+// The fork's own coordinates: the update checker must look up the package this
+// build is actually published as, and the repository it is actually developed
+// in. The original repository is gone and its npm package is deprecated, so
+// pointing either at it would report "no update" forever.
+export const WORKBUDDY_REPOSITORY_URL = 'https://github.com/Venshell/dsh-workbuddy-connect'
+export const WORKBUDDY_UPDATE_PACKAGE_NAME = '@venshell/dsh-workbuddy-connect'
+export const WORKBUDDY_UPDATE_NPM_METADATA_URL = `https://registry.npmjs.org/-/package/${encodeURIComponent(WORKBUDDY_UPDATE_PACKAGE_NAME)}/dist-tags`
 export const WORKBUDDY_UPDATE_RELEASES_API_URL = `${WORKBUDDY_REPOSITORY_URL.replace('https://github.com', 'https://api.github.com/repos')}/releases?per_page=100`
 export const WORKBUDDY_RELEASE_PAGE_BASE = `${WORKBUDDY_REPOSITORY_URL}/releases/tag/`
 export const WORKBUDDY_UPDATE_TIMEOUT_MS = 8_000

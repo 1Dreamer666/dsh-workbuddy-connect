@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs'
 import type { UserConfig } from 'tsdown'
 
-const PLUGIN_ID = 'dsh-workbuddy-connect'
+// The client bundle's loader id. It must match the specifier the loader entry
+// in cordis.patch.yml resolves to, which is now the scoped package name.
+const PLUGIN_ID = '@venshell/dsh-workbuddy-connect'
 
 /** Read the npm version once so the build injects it into src/version.ts. */
 const PACKAGE_VERSION = JSON.parse(

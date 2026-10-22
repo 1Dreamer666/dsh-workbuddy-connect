@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
 
 /** The package name to look for while walking up from the module. */
-const PACKAGE_NAME = 'dsh-workbuddy-connect'
+const PACKAGE_NAME = '@venshell/dsh-workbuddy-connect'
 
 /**
  * Read `package.json` walking up from one module URL.

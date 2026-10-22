@@ -27,7 +27,9 @@ function fakePackage(manifest: unknown | undefined, dirs: string[] = ['lib']): s
 
 describe('resolvePackageVersion', () => {
   it('reads the manifest of the copy the module was loaded from', () => {
-    const url = fakePackage({ name: 'dsh-workbuddy-connect', version: '9.9.9' })
+    // The scoped name this fork publishes as; an unscoped manifest is now the
+    // "another package" case below.
+    const url = fakePackage({ name: '@venshell/dsh-workbuddy-connect', version: '9.9.9' })
     expect(resolvePackageVersion(url)).toBe('9.9.9')
   })
 
