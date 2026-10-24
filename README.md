@@ -16,7 +16,7 @@
 ```text
 请帮我安装并验证 DSH（DeepSeek Harness）插件 dsh-workbuddy-connect（项目地址：https://github.com/Venshell/dsh-workbuddy-connect）：
 先阅读项目 README，确认我实际使用的界面（Web / Desktop / TUI）与 DSH 内核版本，桌面版以 App 内置核心为准，不要用独立 CLI 的版本代替；
-再按版本对应关系从 npm 正式包安装（0.2.1-rc.2→0.7.9、0.2.1-rc.1→0.7.7、0.2.0-rc.2→0.7.6、rc.1→0.7.0、0.1.5–0.1.7→0.6.5），优先走本机受支持的非插件市场渠道；部分 Desktop 发行版（尤其官方 Electron 版）的 profile 由 App 管理，各发行版规则未必相同，先确认我所用的发行版，再探查其合规的安装方式，但不得绕过其校验；
+再按版本对应关系从 npm 正式包安装（0.2.1-rc.3→0.8.1、0.2.1-rc.2→0.7.9、0.2.1-rc.1→0.7.7、0.2.0-rc.2→0.7.6、rc.1→0.7.0、0.1.5–0.1.7→0.6.5），优先走本机受支持的非插件市场渠道；部分 Desktop 发行版（尤其官方 Electron 版）的 profile 由 App 管理，各发行版规则未必相同，先确认我所用的发行版，再探查其合规的安装方式，但不得绕过其校验；
 任何本地文件或配置改动，先征得我同意并做好备份；
 装完后验证模型选择器里出现 WorkBuddy 分组，并陪我完成一次简短对话；
 若 Desktop 安装仍因 generation 校验失败（如 @types/retry 误报），请如实报告、参照上游 dataelement/dsh-desktop#688，并建议我改用独立的 Web / TUI，不要修改依赖包或绕过校验。
@@ -26,7 +26,8 @@
 
 | DSH 内核 | 推荐插件版 |
 |---|---|
-| 0.2.1-rc.2 | 0.7.9（npm latest） |
+| 0.2.1-rc.3 | 0.8.1（npm latest） |
+| 0.2.1-rc.2 | 0.7.9 |
 | 0.2.1-rc.1 | 0.7.7 |
 | 0.2.0-rc.2 | 0.7.6 |
 | 0.2.0-rc.1 | 0.7.0 |
@@ -36,8 +37,8 @@
 <summary>手动安装（命令行，仅 Web / TUI）</summary>
 
 ```sh
-# Web（按实际内核固定版本，示例为 0.2.1-rc.2 → 0.8.0；也可用 github:Venshell/dsh-workbuddy-connect 从源码安装）
-dsh plugin --profile web add @venshell/dsh-workbuddy-connect@0.8.0
+# Web（按实际内核固定版本，示例为 0.2.1-rc.3 → 0.8.1；也可用 github:Venshell/dsh-workbuddy-connect 从源码安装）
+dsh plugin --profile web add @venshell/dsh-workbuddy-connect@0.8.1
 dsh web
 
 # TUI（示例为 0.1.x 内核；该 profile 需用 pnpm 11 安装，如 npx pnpm@11）
@@ -155,6 +156,7 @@ llm-workbuddy:
 
 | DSH 内核 | 推荐插件版 | 注意事项 |
 |---|---|---|
+| `0.2.1-rc.3` | `0.8.1` | 仅适配这一内核；本地检查未发现 rc.2→rc.3 的 API 变化，请以实机验证为准。 |
 | `0.2.1-rc.2` | `0.7.9` | 仅适配这一内核；`0.2.0-rc.2` 与 `0.2.1-rc.2` 不同，请核对 App 内置版本。 |
 | `0.2.1-rc.1` | `0.7.7` | 内核升级到 `@earendil-works/pi-ai` 1.3.0，插件同步自带 1.3.0，历史遗留的 0.87.1 overrides 必须移除（见下方 pi-ai 说明）。 |
 | `0.2.0-rc.2` | `0.7.6` | 上一代内核线；修复企业账号模型目录缺项与国际版对话被渠道校验拦截，勿停留在有注册表回归的 0.7.2。 |
@@ -165,6 +167,7 @@ llm-workbuddy:
 
 历次更新（完整记录见 [releases](https://github.com/Venshell/dsh-workbuddy-connect/releases)）：
 
+- **0.8.1**：适配 DSH 0.2.1-rc.3 内核：七项 DSH 服务 peer 与开发依赖收窄到 0.2.1-rc.3，随包的官方原子写入工具同步升级；typecheck 与全量测试通过，未发现 rc.2→rc.3 的 API 变化。
 - **0.8.0**：修复国内版三处导致「请求被拦截」或模型消失的问题。① `prepareCnChatBody` 补齐 `developer` → `system` 改写（#201）：国内端点对 `role: "developer"` 返回 400 / `11128`，而原来的实现依赖 shim 先规范化，任何绕过 shim 的调用都会泄漏；该改写是幂等的，对已规范化的 body 为 no-op。② 新增品牌指纹清洗（#204）：system / developer 消息中出现完整品牌词同样触发 `11128`，现仅把品牌缩短，句子其余内容逐字保留；只匹配空格与制表符，`deepseek-harness` 这类路径与包名不受影响，user / tool 内容永不改写。③ 国内模型目录改为双源并集：console 文档 `/v2/enterprises/personal/models`（桌面 App 选择器同源，仍带 `cli` agent）与 `/v3/config`。两源互不为超集，取并集可避免任一侧变动导致模型整批消失；单侧失败自动降级到另一侧。此前 `/v3/config` 对 App 形态 UA 不再返回 `cli` agent，选择器因此丢失 20 个 id 中的 15 个，而这些模型在 chat 端点其实仍照常可用。
 - **0.7.9**：恢复 DSH 0.2.1-rc.2 上国际版最大上下文窗口开关，修复延迟初始化及设置持久化（PR [#172](https://github.com/corrinehu/dsh-workbuddy-connect/pull/172)，by @1Dreamer666）；避免本地服务绑定到 fetch 禁用端口导致国际版 502（PR [#164](https://github.com/corrinehu/dsh-workbuddy-connect/pull/164)，by @Xiong-Ziyi）；同名积分包合并展示，减少重复条目。
 - **0.7.8**：适配 DSH 0.2.1-rc.2；将官方原子写入工具打包到插件，避免依赖宿主暴露该模块；更新国内模型目录快照，区分 Hy3 / Hy3-X；优化推理检测结果展示，调整积分刷新按钮位置并修正悬停提示。感谢 @chenpiyanghappy 的 PR [#156](https://github.com/corrinehu/dsh-workbuddy-connect/pull/156)。
@@ -178,9 +181,9 @@ llm-workbuddy:
 - **0.7.0**：适配 DSH 0.2.0 的设置服务改造，不再支持 0.1.x。
 - **0.6.5**：0.1.x 线最终版本。
 
-固定版本安装示例：`dsh plugin --profile web add @venshell/dsh-workbuddy-connect@0.8.0`（0.7.9 及更早用旧包名 `dsh-workbuddy-connect`）。
+固定版本安装示例：`dsh plugin --profile web add @venshell/dsh-workbuddy-connect@0.8.1`（0.7.9 及更早用旧包名 `dsh-workbuddy-connect`）。
 
-**pi-ai 版本按内核线区分，不能混**：0.2.1-rc.1 / rc.2 内核线（分别对应插件 0.7.7 / 0.7.8–0.7.9）已升级到 `@earendil-works/pi-ai` 1.3.0（由插件自带），profile 级历史遗留的 `overrides: {'@earendil-works/pi-ai': '0.87.1'}` **必须移除**，否则插件会因加载到旧一代 pi-ai 而启动失败；0.2.0-rc.2 内核线（插件 0.7.6）仍要求 `^0.87.1`，在这条线上**不要**把 profile 级的 pi-ai 升到 1.x，第三方插件管理器的「可更新」提示不校验 peer 约束、不能照做（[#86](https://github.com/corrinehu/dsh-workbuddy-connect/issues/86)）。
+**pi-ai 版本按内核线区分，不能混**：0.2.1-rc.1 / rc.2 / rc.3 内核线（分别对应插件 0.7.7 / 0.7.8–0.7.9 / 0.8.1）已升级到 `@earendil-works/pi-ai` 1.3.0（由插件自带），profile 级历史遗留的 `overrides: {'@earendil-works/pi-ai': '0.87.1'}` **必须移除**，否则插件会因加载到旧一代 pi-ai 而启动失败；0.2.0-rc.2 内核线（插件 0.7.6）仍要求 `^0.87.1`，在这条线上**不要**把 profile 级的 pi-ai 升到 1.x，第三方插件管理器的「可更新」提示不校验 peer 约束、不能照做（[#86](https://github.com/corrinehu/dsh-workbuddy-connect/issues/86)）。
 
 ## 免责声明
 
