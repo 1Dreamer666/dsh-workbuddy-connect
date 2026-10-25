@@ -69,10 +69,9 @@ describe('peer manifest pins the verified DSH cores', () => {
    * nobody verified. Since 0.7.0 the seven DSH service peers are pinned to
    * exactly the cores this release was smoke-tested on; extending support
    * means editing this list after a real run, not letting a caret do it.
-   * Since 0.7.7 the list was 0.2.1-rc.1 alone: 0.2.0-rc.2 cannot be
-   * smoke-tested anymore alongside it, and an untested arm is support
-   * nobody verified. This candidate targets 0.2.1-rc.2 and bundles the
-   * official atomic-write helper. Local checks do not replace Desktop
+   * Since 0.7.7 the list was 0.2.1-rc.1 alone, 0.7.8-0.7.9 targeted 0.2.1-rc.2,
+   * and 0.7.10 extends support to 0.2.1-rc.3 while retaining 0.2.1-rc.2
+   * verified compatibility. Local checks do not replace Desktop
    * acceptance testing.
    *
    * #74's lesson on top of it: pi-ai must NOT be a dual-arm range. An
@@ -99,7 +98,7 @@ describe('peer manifest pins the verified DSH cores', () => {
       readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
     ) as { peerDependencies: Record<string, string> }
     for (const name of DSH_SERVICE_PEERS) {
-      expect(pkg.peerDependencies[name], `${name} missing from peerDependencies`).toBe('0.2.1-rc.2')
+      expect(pkg.peerDependencies[name], `${name} missing from peerDependencies`).toBe('0.2.1-rc.2 || 0.2.1-rc.3')
     }
   })
 
