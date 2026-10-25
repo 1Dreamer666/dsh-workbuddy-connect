@@ -160,7 +160,7 @@ The plugin version must match the DSH core — a mismatched combination fails to
 
 | DSH core | Recommended plugin | Notes |
 |---|---|---|
-| `0.2.1-rc.3` | `0.8.1` | Targets this core only; local checks found no API change from rc.2 to rc.3, but trust real-machine verification. |
+| `0.2.1-rc.3` and later, below `0.3.0` | Any release carrying this change | With `engines.dsh` declared, a core upgrade anywhere inside the same `0.2.x` line — rc or stable — no longer requires a matching plugin release. `0.8.1` and earlier still need exactly `0.2.1-rc.3`. |
 | `0.2.1-rc.2` | `0.7.9` | Targets this core only; `0.2.0-rc.2` and `0.2.1-rc.2` differ. Check the core bundled in your Desktop app. |
 | `0.2.1-rc.1` | `0.7.7` | The core moved to `@earendil-works/pi-ai` 1.3.0, so the plugin bundles 1.3.0 too — a leftover 0.87.1 overrides entry must be removed (see the pi-ai note below). |
 | `0.2.0-rc.2` | `0.7.6` | Previous core line; fixes enterprise catalog gaps and international chat requests blocked by the upstream channel check. Avoid 0.7.2 with its registry regression. |
@@ -169,8 +169,30 @@ The plugin version must match the DSH core — a mismatched combination fails to
 | `0.1.2-rc.1` | `0.3.1` | Older line, historical maintenance only. |
 | `0.1.1-rc.2` | `0.2.6` | Older line, historical maintenance only. |
 
+### Why a core upgrade no longer needs a new plugin release
+
+`0.8.1` and earlier pinned six DSH service peers to exactly `0.2.1-rc.3`. When a plugin declares **no** `engines.dsh`, DSH's install check (`evaluatePluginCompatibility` in `@deepseek-ai/dsh-app-boot`) compares every `@deepseek-ai/dsh-*` peer against the running core — an exact version string cannot match a newer core, so the plugin became uninstallable the moment the core moved:
+
+```
+dsh: installation rejected: Plugin @venshell/dsh-workbuddy-connect@0.8.1 is
+incompatible with dsh 0.2.1-rc.4: requirements {"@deepseek-ai/dsh-llm":"0.2.1-rc.3", ...}
+```
+
+Declaring `engines.dsh` removes that structurally: as soon as the field is present the check uses it **alone** and skips every peer. The peers therefore go back to being a build-and-test baseline, and the install gate is a single range:
+
+```json
+"engines": { "dsh": ">=0.2.1-rc.3 <0.3.0-0" }
+```
+
+- The floor is the core this release was actually verified on. `0.2.1-rc.2` and older stay rejected — this tree was neither compiled nor tested against them.
+- The ceiling stops before the next minor. DSH has changed the service APIs this plugin calls at minor boundaries, so admitting an unverified minor would promise compatibility nobody checked.
+- `<0.3.0-0`, not `<0.3.0`: the check matches with `includePrerelease: true`, under which a plain `<0.3.0` also admits `0.3.0-rc.1` — a prerelease of exactly the line the range means to exclude. `-0` is the lowest possible `0.3.0` prerelease, closing that hole precisely.
+
+A core upgrade across a minor boundary still needs a matching plugin release — but the window where the app upgrades and the plugin immediately refuses to install is gone.
+
 Release history (full records at [releases](https://github.com/Venshell/dsh-workbuddy-connect/releases)):
 
+- **Unreleased**: adds `engines.dsh` (`>=0.2.1-rc.3 <0.3.0-0`) so the install check is decided by a range instead of six exact peers, and a core upgrade inside the `0.2.x` line no longer needs a matching plugin release; the six DSH service peers stay pinned to `0.2.1-rc.3` as the build-and-test baseline. `tests/version.spec.ts` gains four assertions, driven through the real `evaluatePluginCompatibility` across `rc.2` / `rc.3` / `rc.4` / `0.2.1` / `0.2.9` / `0.3.0-rc.1` / `0.3.0`.
 - **0.8.1**: adapts to the DSH 0.2.1-rc.3 core: the seven DSH service peers and dev dependencies narrow to 0.2.1-rc.3, and the bundled official atomic-write helper upgrades with them; typecheck and the full test suite pass with no API change found between rc.2 and rc.3.
 - **0.7.9**: restores the international edition's maximum-context switch on DSH 0.2.1-rc.2, including delayed initialization and persistent settings (PR [#172](https://github.com/corrinehu/dsh-workbuddy-connect/pull/172), by @1Dreamer666); avoids fetch-blocked local ports that could cause international-edition 502 errors (PR [#164](https://github.com/corrinehu/dsh-workbuddy-connect/pull/164), by @Xiong-Ziyi); combines credit packages with the same name to reduce repeated entries.
 - **0.7.8**: adapts to DSH 0.2.1-rc.2; bundles the official atomic-write helper instead of relying on host module exposure; refreshes the China catalog snapshot and distinguishes Hy3 / Hy3-X; improves probe result labels and fixes the credit-refresh placement and tooltip. Thanks to @chenpiyanghappy for PR [#156](https://github.com/corrinehu/dsh-workbuddy-connect/pull/156).

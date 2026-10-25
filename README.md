@@ -156,7 +156,7 @@ llm-workbuddy:
 
 | DSH 内核 | 推荐插件版 | 注意事项 |
 |---|---|---|
-| `0.2.1-rc.3` | `0.8.1` | 仅适配这一内核；本地检查未发现 rc.2→rc.3 的 API 变化，请以实机验证为准。 |
+| `0.2.1-rc.3` 及以上、`0.3.0` 之前 | 含本改动的版本起 | 声明 `engines.dsh` 后，同一内核线（含后续 `0.2.x` 的 rc 与正式版）无需随内核升级更换插件。`0.8.1` 及更早仍需严格对应 `0.2.1-rc.3`。 |
 | `0.2.1-rc.2` | `0.7.9` | 仅适配这一内核；`0.2.0-rc.2` 与 `0.2.1-rc.2` 不同，请核对 App 内置版本。 |
 | `0.2.1-rc.1` | `0.7.7` | 内核升级到 `@earendil-works/pi-ai` 1.3.0，插件同步自带 1.3.0，历史遗留的 0.87.1 overrides 必须移除（见下方 pi-ai 说明）。 |
 | `0.2.0-rc.2` | `0.7.6` | 上一代内核线；修复企业账号模型目录缺项与国际版对话被渠道校验拦截，勿停留在有注册表回归的 0.7.2。 |
@@ -165,8 +165,31 @@ llm-workbuddy:
 | `0.1.2-rc.1` | `0.3.1` | 更早旧线，仅历史维护。 |
 | `0.1.1-rc.2` | `0.2.6` | 更早旧线，仅历史维护。 |
 
+### 为什么内核小版本升级不再需要换插件
+
+`0.8.1` 及更早的版本把六项 DSH 服务 peer 精确钉在 `0.2.1-rc.3`。DSH 的安装校验（`@deepseek-ai/dsh-app-boot` 的 `evaluatePluginCompatibility`）在插件**没有**声明 `engines.dsh` 时，会逐条比对每个 `@deepseek-ai/dsh-*` peer 与运行内核；精确版本串匹配不上新内核，于是内核一升级、插件就装不上：
+
+```
+dsh: installation rejected: Plugin @venshell/dsh-workbuddy-connect@0.8.1 is
+incompatible with dsh 0.2.1-rc.4: requirements {"@deepseek-ai/dsh-llm":"0.2.1-rc.3", ...}
+```
+
+声明 `engines.dsh` 可以从结构上消除这个问题：该校验一旦发现 `engines.dsh`，就**只**用它判断，peer 全部跳过。因此 peer 回归成纯粹的「构建与测试基准」，安装门槛只剩一条区间：
+
+```json
+"engines": { "dsh": ">=0.2.1-rc.3 <0.3.0-0" }
+```
+
+- 下界是这一版真正实机验证过的内核，`0.2.1-rc.2` 及更早仍会被拒——本仓库没有对它们做过编译与测试。
+- 上界停在下一个次版本之前。DSH 历史上在次版本改过本插件调用的服务 API，把未验证的次版本也放进来，等于承诺没人验证过的兼容性。
+- 写成 `<0.3.0-0` 而不是 `<0.3.0`：该校验以 `includePrerelease: true` 匹配，普通的 `<0.3.0` 会连 `0.3.0-rc.1` 一起放行，正好是本区间想挡住的下一代的预发布版。`-0` 是 `0.3.0` 可能的最低预发布版，把这条缝精确堵上。
+
+升级到下一个次版本内核时，仍然需要跟着升级插件——只是不会再出现「内核升完、插件立刻装不上」的窗口期。
+
 历次更新（完整记录见 [releases](https://github.com/Venshell/dsh-workbuddy-connect/releases)）：
 
+
+- **未发布**：新增 `engines.dsh`（`>=0.2.1-rc.3 <0.3.0-0`），让安装校验改由区间决定，内核在同一 `0.2.x` 线内升级时不再需要重发插件；六项 DSH 服务 peer 保持精确钉住 `0.2.1-rc.3`，作为构建与测试基准。`tests/version.spec.ts` 新增四组断言，并用真实 `evaluatePluginCompatibility` 覆盖 `rc.2` / `rc.3` / `rc.4` / `0.2.1` / `0.2.9` / `0.3.0-rc.1` / `0.3.0` 七个版本的准入结果。
 - **0.8.1**：适配 DSH 0.2.1-rc.3 内核：七项 DSH 服务 peer 与开发依赖收窄到 0.2.1-rc.3，随包的官方原子写入工具同步升级；typecheck 与全量测试通过，未发现 rc.2→rc.3 的 API 变化。
 - **0.8.0**：修复国内版三处导致「请求被拦截」或模型消失的问题。① `prepareCnChatBody` 补齐 `developer` → `system` 改写（#201）：国内端点对 `role: "developer"` 返回 400 / `11128`，而原来的实现依赖 shim 先规范化，任何绕过 shim 的调用都会泄漏；该改写是幂等的，对已规范化的 body 为 no-op。② 新增品牌指纹清洗（#204）：system / developer 消息中出现完整品牌词同样触发 `11128`，现仅把品牌缩短，句子其余内容逐字保留；只匹配空格与制表符，`deepseek-harness` 这类路径与包名不受影响，user / tool 内容永不改写。③ 国内模型目录改为双源并集：console 文档 `/v2/enterprises/personal/models`（桌面 App 选择器同源，仍带 `cli` agent）与 `/v3/config`。两源互不为超集，取并集可避免任一侧变动导致模型整批消失；单侧失败自动降级到另一侧。此前 `/v3/config` 对 App 形态 UA 不再返回 `cli` agent，选择器因此丢失 20 个 id 中的 15 个，而这些模型在 chat 端点其实仍照常可用。
 - **0.7.9**：恢复 DSH 0.2.1-rc.2 上国际版最大上下文窗口开关，修复延迟初始化及设置持久化（PR [#172](https://github.com/corrinehu/dsh-workbuddy-connect/pull/172)，by @1Dreamer666）；避免本地服务绑定到 fetch 禁用端口导致国际版 502（PR [#164](https://github.com/corrinehu/dsh-workbuddy-connect/pull/164)，by @Xiong-Ziyi）；同名积分包合并展示，减少重复条目。
